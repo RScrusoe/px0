@@ -208,9 +208,9 @@ func (p *prSession) Close() {
 		return
 	}
 	if p.mode == prModePreview || p.mode == prModeCheckout {
-		// worktree is the user's own repo here: only px0's temp files and refs go.
+		// worktree is the user's own repo here: only px0's temp files go. The
+		// refs/px0 refs stay so reopening the PR skips the fetch (fetchPRRefs).
 		os.RemoveAll(p.blobDir)
-		exec.Command("git", "-C", p.srcRepo, "update-ref", "-d", fmt.Sprintf("refs/px0/base/%d", p.meta.Number)).Run()
 		return
 	}
 	if p.srcRepo != "" {

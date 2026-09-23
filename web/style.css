@@ -2003,9 +2003,36 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
   padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
 }
 .pr-page-title { font: 600 18px var(--ui); }
-.pr-page-body { max-width: 900px; display: flex; flex-direction: column; gap: 24px; }
-.pr-page-input { min-height: 64px; height: auto; font-size: 12.5px; }
-.pr-page-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.pr-page-head, .pr-page-body { max-width: 960px; margin-left: auto; margin-right: auto; }
+.pr-page-body { display: flex; flex-direction: column; gap: 20px; }
+/* The description reuses the markdown renderer, but not its full-page
+   centering and 40vh scroll-past padding. */
+#pr-page-desc.md {
+  max-width: none; margin: 0; padding: 16px 20px; font-size: 14px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg2);
+}
+.pr-page-section > .pr-comments-section-title { margin-bottom: 8px; }
+.pr-page-commits { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.pr-page-commit:last-child { border-bottom: 0; }
+.pr-page-commit { padding: 8px 12px; }
+textarea.pr-page-input {
+  display: block; width: 100%; box-sizing: border-box; min-height: 96px; height: auto;
+  resize: vertical; padding: 10px 12px; font: 13px/1.5 var(--ui);
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+}
+.pr-page-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.pr-page .footer-btn {
+  height: 30px; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg3); color: var(--fg); font: 500 12.5px var(--ui); opacity: 1; cursor: pointer;
+  text-decoration: none; display: inline-flex; align-items: center;
+}
+.pr-page .footer-btn:hover:not(:disabled) { background: var(--bg4); border-color: var(--faint); }
+.pr-page .footer-btn:disabled { opacity: 0.5; cursor: default; }
+#pr-page-submit-approve { background: #238636; border-color: #2ea043; color: #fff; }
+#pr-page-submit-approve:hover { background: #2ea043; }
+#pr-page-submit-request-changes { color: #f85149; }
+#pr-page-submit-comment, #pr-page-issue-send { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pr-page-head .footer-btn { height: 26px; padding: 0 10px; }
 .pr-page-commits { display: flex; flex-direction: column; }
 .pr-page-commit {
   display: flex; align-items: baseline; gap: 10px; padding: 7px 4px;
@@ -2127,3 +2154,4 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 }
 
 
+.pr-page-actions .grow { flex: 1; }

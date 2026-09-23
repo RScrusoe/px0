@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,6 +60,8 @@ type prListItem struct {
 	Draft     bool   `json:"draft"`
 	UpdatedAt string `json:"updatedAt"`
 	URL       string `json:"url"`
+	HeadSHA   string `json:"-"`
+	meta      PRMeta
 }
 
 func listOpenPRs(ctx context.Context, owner, repo, token string) ([]prListItem, error) {
@@ -76,13 +79,20 @@ func listOpenPRs(ctx context.Context, owner, repo, token string) ([]prListItem, 
 		Number    int    `json:"number"`
 		Title     string `json:"title"`
 		Draft     bool   `json:"draft"`
+		State     string `json:"state"`
+		MergedAt  string `json:"merged_at"`
 		UpdatedAt string `json:"updated_at"`
 		HTMLURL   string `json:"html_url"`
 		User      struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		Head struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			SHA  string `json:"sha"`
+			Repo struct {
+				CloneURL string `json:"clone_url"`
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"head"`
 		Base struct {
 			Ref string `json:"ref"`
@@ -96,7 +106,15 @@ func listOpenPRs(ctx context.Context, owner, repo, token string) ([]prListItem, 
 		items = append(items, prListItem{
 			Number: p.Number, Title: p.Title, Author: p.User.Login,
 			Head: p.Head.Ref, Base: p.Base.Ref, Draft: p.Draft,
-			UpdatedAt: p.UpdatedAt, URL: p.HTMLURL,
+			UpdatedAt: p.UpdatedAt, URL: p.HTMLURL, HeadSHA: p.Head.SHA,
+			// Same fields fetchPRMeta reads from GET /pulls/N.
+			meta: PRMeta{
+				Number: p.Number, Title: p.Title, Author: p.User.Login, State: p.State,
+				Merged: p.MergedAt != "", MergedAt: p.MergedAt, Draft: p.Draft,
+				BaseRef: p.Base.Ref, HeadRef: p.Head.Ref, HeadSHA: p.Head.SHA,
+				HeadRepoCloneURL: p.Head.Repo.CloneURL,
+				HeadIsFork:       p.Head.Repo.FullName != "" && !strings.EqualFold(p.Head.Repo.FullName, owner+"/"+repo),
+			},
 		})
 	}
 	return items, nil
@@ -109,14 +127,26 @@ func previewPR(ctx context.Context, root, owner, repo string, num int) (*prSessi
 	target := PRTarget{Provider: "github", Owner: owner, Repo: repo, Number: num,
 		URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, num)}
 	token, _ := provider.ResolveToken(readSettings())
-	meta, err := provider.FetchPR(ctx, target, token)
-	if err != nil {
-		return nil, err
+	meta, writeAccess, cached := cachedPRMeta(owner, repo, num)
+	if !cached {
+		// The two GitHub calls are independent; running them together halves
+		// the round trips before the review can show.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			writeAccess = provider.CheckPushAccess(ctx, target, token)
+		}()
+		var err error
+		meta, err = provider.FetchPR(ctx, target, token)
+		wg.Wait()
+		if err != nil {
+			return nil, err
+		}
 	}
-	headRev := fmt.Sprintf("refs/px0/pr/%d", num)
-	if out, err := exec.Command("git", "-C", root, "fetch", "--no-tags", "origin",
-		fmt.Sprintf("+refs/pull/%d/head:%s", num, headRev)).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
+	headRev := prHeadRef(num)
+	if err := fetchPRRefs(root, []prListItem{{Number: num, Base: meta.BaseRef, HeadSHA: meta.HeadSHA}}); err != nil {
+		return nil, err
 	}
 	diffBase, warning := prMergeBase(root, headRev, meta.BaseRef, num)
 	blobDir, err := os.MkdirTemp("", "px0-prview-*")
@@ -131,7 +161,7 @@ func previewPR(ctx context.Context, root, owner, repo string, num int) (*prSessi
 		target:          target,
 		meta:            meta,
 		token:           token,
-		writeAccess:     provider.CheckPushAccess(ctx, target, token),
+		writeAccess:     writeAccess,
 		diffBase:        diffBase,
 		diffBaseWarning: warning,
 		worktree:        root,
@@ -145,22 +175,93 @@ func previewPR(ctx context.Context, root, owner, repo string, num int) (*prSessi
 // prMergeBase is computeDiffBase for an arbitrary head rev instead of a
 // checked-out HEAD.
 func prMergeBase(root, head, baseRef string, num int) (string, string) {
-	baseTrack := fmt.Sprintf("refs/px0/base/%d", num)
-	fetchOut, fetchErr := exec.Command("git", "-C", root, "fetch", "--no-tags", "origin",
-		fmt.Sprintf("+refs/heads/%s:%s", baseRef, baseTrack)).CombinedOutput()
-	if fetchErr == nil {
-		if mb := gitMergeBase(root, head, baseTrack); mb != "" {
-			return mb, ""
-		}
+	if mb := gitMergeBase(root, head, prBaseRef(num)); mb != "" {
+		return mb, ""
 	}
 	if mb := gitMergeBase(root, head, "origin/"+baseRef); mb != "" {
 		return mb, ""
 	}
-	warning := fmt.Sprintf("could not resolve a merge-base with %s", baseRef)
-	if fetchErr != nil {
-		warning += " (" + strings.TrimSpace(string(fetchOut)) + ")"
+	return head, fmt.Sprintf("could not resolve a merge-base with %s", baseRef)
+}
+
+func prHeadRef(num int) string { return fmt.Sprintf("refs/px0/pr/%d", num) }
+func prBaseRef(num int) string { return fmt.Sprintf("refs/px0/base/%d", num) }
+
+// The open-PR list already carries everything GET /pulls/N returns, so a
+// PR opened soon after listing needs no GitHub round trip. Past prListTTL
+// the live call is used, so a stale title or head can't linger.
+const prListTTL = 2 * time.Minute
+
+type prListCache struct {
+	at          time.Time
+	repo        string
+	metas       map[int]PRMeta
+	writeAccess bool
+}
+
+var (
+	prListMu   sync.Mutex
+	prListLast prListCache
+)
+
+func storePRList(owner, repo string, prs []prListItem, writeAccess bool) {
+	metas := make(map[int]PRMeta, len(prs))
+	for _, p := range prs {
+		metas[p.Number] = p.meta
 	}
-	return head, warning
+	prListMu.Lock()
+	prListLast = prListCache{at: time.Now(), repo: owner + "/" + repo, metas: metas, writeAccess: writeAccess}
+	prListMu.Unlock()
+}
+
+func cachedPRMeta(owner, repo string, num int) (PRMeta, bool, bool) {
+	prListMu.Lock()
+	defer prListMu.Unlock()
+	c := prListLast
+	if c.repo != owner+"/"+repo || time.Since(c.at) > prListTTL {
+		return PRMeta{}, false, false
+	}
+	m, ok := c.metas[num]
+	return m, c.writeAccess, ok
+}
+
+var (
+	prFetchMu sync.Mutex
+	// PR number -> head SHA already fetched (with its base) by this process,
+	// so opening a PR the list prefetched needs no network round trip to git.
+	prFetched = map[int]string{}
+)
+
+// fetchPRRefs fetches the head and base of every PR not yet fetched at its
+// current head SHA, in one git fetch (one SSH/HTTPS connection).
+func fetchPRRefs(root string, prs []prListItem) error {
+	prFetchMu.Lock()
+	defer prFetchMu.Unlock()
+	var specs []string
+	var todo []prListItem
+	for _, p := range prs {
+		if p.HeadSHA != "" && prFetched[p.Number] == p.HeadSHA {
+			continue
+		}
+		todo = append(todo, p)
+		specs = append(specs, fmt.Sprintf("+refs/pull/%d/head:%s", p.Number, prHeadRef(p.Number)))
+		if p.Base != "" {
+			specs = append(specs, fmt.Sprintf("+refs/heads/%s:%s", p.Base, prBaseRef(p.Number)))
+		}
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	args := append([]string{"-C", root, "fetch", "--no-tags", "origin"}, specs...)
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch PR refs: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	for _, p := range todo {
+		if p.HeadSHA != "" {
+			prFetched[p.Number] = p.HeadSHA
+		}
+	}
+	return nil
 }
 
 // previewRev is the rev file contents come from, or "" when they come from
@@ -338,11 +439,22 @@ func (s *Server) handlePRList(w http.ResponseWriter, r *http.Request) {
 	resp["token"] = true
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	var writeAccess bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		writeAccess = checkPushAccess(ctx, owner, repo, token)
+	}()
 	prs, err := listOpenPRs(ctx, owner, repo, token)
+	wg.Wait()
 	if err != nil {
 		resp["error"] = err.Error()
 	} else {
 		resp["prs"] = prs
+		storePRList(owner, repo, prs, writeAccess)
+		root := s.ix.Root()
+		go fetchPRRefs(root, prs)
 	}
 	writeJSON(w, resp)
 }

@@ -1001,7 +1001,7 @@ function renderPRList() {
   if (!listEl || !prList) return;
   const repoEl = $('#prs-repo');
   if (repoEl) repoEl.textContent = prList.repo || 'Pull Requests';
-  const activeNum = meta?.number || 0;
+  const activeNum = pendingNum || meta?.number || 0;
   if (!prList.repo && !meta) {
     listEl.innerHTML = '<div class="prs-empty">No GitHub <code>origin</code> remote in this repo.</div>';
     return;
@@ -1033,14 +1033,15 @@ function renderPRList() {
           (pr.draft ? '<span class="prs-draft">Draft</span>' : '') + '</div>' +
         '<div class="prs-row-meta"><span>' + esc(pr.author || '') + '</span><span class="prs-branch">' + esc(pr.head || '') + '</span></div>' +
       '</div>' +
-      (isActive ? '<div class="prs-detail"></div>' : '') +
+      (isActive ? '<div class="prs-detail">' + (pendingNum ? '<div class="prs-empty">Loading…</div>' : '') + '</div>' : '') +
     '</div>';
   }).join('');
   const detail = listEl.querySelector('.prs-detail');
-  if (detail && meta) detail.appendChild(prBar());
+  if (detail && meta && !pendingNum) detail.appendChild(prBar());
 }
 
 let detailFolded = false;
+let pendingNum = 0;  // PR being opened: its row expands before the server answers
 
 // The PR details node is moved into the active list row; before the list is
 // re-rendered it goes back to its parking spot so innerHTML can't destroy it.
@@ -1052,19 +1053,20 @@ function parkBar() {
 
 async function openListedPR(number) {
   if (meta?.number === number) return;
-  const row = document.querySelector('[data-pr-number="' + number + '"]');
-  row?.classList.add('loading');
+  pendingNum = number;
+  detailFolded = false;
+  renderPRList();
   try {
     const m = await apiPostJson('/api/prs/open', { number });
-    detailFolded = false;
+    pendingNum = 0;
     enterPR(m);
     if (m.mode === 'checkout') await refreshTree();
     await reloadOpenTabs();
     openPRPage();
   } catch (e) {
+    pendingNum = 0;
+    renderPRList();
     showToast('!', e.message || 'Could not open PR');
-  } finally {
-    row?.classList.remove('loading');
   }
 }
 
