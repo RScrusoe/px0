@@ -39,7 +39,11 @@ Build on px0 foundation, do not fork UI paradigm:
 - [x] Frontend: Approve warns when files unchecked
 - [x] Overview page: title opens in-app page (description + commits); both comment inputs moved there, review view is comment-free
 - [x] Backend: `GET /api/pr/details` (live body + server-rendered HTML + commits)
-- [ ] `go vet` + `go test ./...` (pr-related) green, manual `go run . -dev . <pr-url>` smoke
+- [x] `go vet` + `go test ./...` (pr-related) green, manual smoke
+- [x] Repo PR list: plain `px0` in a GitHub repo shows a Pull Requests sidebar view (latest 10 open, from `origin`); no token -> `gh auth login` hint
+- [x] Preview (default): fetch only `refs/px0/pr/N`, serve changed files from git objects; working tree, branch and index untouched
+- [x] Checkout button: switches the repo to local `px0/pr-N` (refuses a dirty tree), unlocks editing/LSP; Return restores the previous branch
+- [x] Bar = title row + files row only; Comment / Request Changes / Approve live on the overview page
 
 ## 4. Out of scope
 - Native VSCode/Cursor extension (after POC proves flow)
@@ -58,3 +62,6 @@ Build on px0 foundation, do not fork UI paradigm:
 - 2026-09-23: verified — `node --check` clean on `pr.js`/`diff.js`, `node scripts/build-web.js` bundles OK (287 KB, no name collisions), Go code hand-reviewed (no Go toolchain on this machine).
 - TODO (needs Go): `go vet ./...`, `go test ./...`, smoke `go run . -dev . <pr-url>` with `gh auth login`.
 - 2026-09-23: local-only (no-PR) variant briefly prototyped, then reverted — decision: fork px0 to own account and raise the POC as a PR there instead.
+- 2026-09-23: persistence bug re-tested: not reproducible with a fresh binary (stale build). Hardened anyway: save errors now 500 and the UI rolls back the checkbox. Verified across a real reload.
+- 2026-09-23: fixed `+0/-0` counts (numstat `-z` parsing).
+- 2026-09-23: repo PR list + preview/checkout/return implemented (`pr_repo.go`); smoke: list -> preview -> checkout -> return -> checkbox reload -> approve gate -> exit.

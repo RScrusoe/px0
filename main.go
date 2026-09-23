@@ -261,7 +261,7 @@ func main() {
 	err = srv.Serve(ln)
 	lsp.Close()
 	agent.Close()
-	pr.Close()
+	pxSrv.ClosePR()
 
 	if interrupted {
 		tel.Close("interrupted")

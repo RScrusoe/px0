@@ -389,6 +389,21 @@ func gitDiffAgainstContext(root, relpath, base string, context int) string {
 	return string(out)
 }
 
+// gitDiffRevs diffs relpath between two revs without touching the working
+// tree -- a previewed PR's merge-base and head (pr_repo.go).
+func gitDiffRevs(root, relpath, base, head string, context int) string {
+	args := []string{"-C", root, "diff", "--no-color"}
+	if context > 0 {
+		args = append(args, "-U"+strconv.Itoa(context))
+	}
+	args = append(args, base, head, "--", relpath)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // gitMergeBase returns the merge-base commit of a and b, or "" if it cannot
 // be determined (e.g. b was never fetched locally).
 func gitMergeBase(root, a, b string) string {
@@ -410,7 +425,11 @@ func gitMergeBase(root, a, b string) string {
 // against base (clean/untracked). base is "HEAD" for the working-tree
 // gutter, or a PR's merge-base in review mode (server.go's diffBase).
 func gitHunksAgainst(root, relpath, base string) (added, modified, deleted []int) {
-	diff := gitDiffAgainst(root, relpath, base)
+	return gitHunks(gitDiffAgainst(root, relpath, base))
+}
+
+// gitHunks is gitHunksAgainst over an already computed unified diff.
+func gitHunks(diff string) (added, modified, deleted []int) {
 	if diff == "" {
 		return nil, nil, nil
 	}

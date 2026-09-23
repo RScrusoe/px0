@@ -43,6 +43,12 @@ type prSession struct {
 
 	comments []prComment
 	nextID   int64
+
+	mode       string          // prModeWorktree, prModePreview, or prModeCheckout (pr_repo.go)
+	headRev    string          // preview: ref holding the PR head, served from git objects
+	blobDir    string          // preview: temp dir PR-head file contents are materialized into
+	prevBranch string          // checkout: branch to return to
+	changed    map[string]bool // preview: lazily computed set of paths the PR touches
 }
 
 // ErrPRMergedCancelled is returned when opening an already-merged PR is cancelled.
@@ -189,6 +195,7 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 		diffBaseWarning: diffBaseWarning,
 		worktree:        tmp,
 		srcRepo:         srcRepo,
+		mode:            prModeWorktree,
 	}, nil
 }
 
@@ -198,6 +205,12 @@ func (p *prSession) Root() string { return p.worktree }
 // references, and deletes the temp checkout. Safe on a nil receiver.
 func (p *prSession) Close() {
 	if p == nil {
+		return
+	}
+	if p.mode == prModePreview || p.mode == prModeCheckout {
+		// worktree is the user's own repo here: only px0's temp files and refs go.
+		os.RemoveAll(p.blobDir)
+		exec.Command("git", "-C", p.srcRepo, "update-ref", "-d", fmt.Sprintf("refs/px0/base/%d", p.meta.Number)).Run()
 		return
 	}
 	if p.srcRepo != "" {
@@ -297,22 +310,28 @@ func (p *prSession) Push() error {
 
 // ---------------------------------------------------------------- HTTP
 
-func (s *Server) prOrFail(w http.ResponseWriter) bool {
-	if s.pr == nil {
+func (s *Server) prOrFail(w http.ResponseWriter) (*prSession, bool) {
+	p := s.curPR()
+	if p == nil {
 		fail(w, http.StatusNotFound, "not a PR review session")
-		return false
+		return nil, false
 	}
-	return true
+	return p, true
 }
 
 func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	p := s.pr
+	writeJSON(w, p.metaJSON())
+}
+
+// metaJSON is the PR summary the UI renders: /api/meta's "pr" and /api/pr/meta.
+func (p *prSession) metaJSON() map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	writeJSON(w, map[string]any{
+	return map[string]any{
 		"number":          p.meta.Number,
 		"title":           p.meta.Title,
 		"author":          p.meta.Author,
@@ -326,17 +345,20 @@ func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
 		"draftCount":      len(p.comments),
 		"diffBaseWarning": p.diffBaseWarning,
 		"url":             p.target.URL,
-	})
+		"mode":            p.mode,
+		"branch":          p.localBranch(),
+		"prevBranch":      p.prevBranch,
+	}
 }
 
 // handlePRExistingComments fetches every comment already posted on the PR
 // (top-level and inline) directly from the forge -- always live, never
 // cached, since another reviewer may have commented since the page loaded.
 func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	p := s.pr
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	issue, review, err := p.provider.FetchComments(ctx, p.target, p.token)
@@ -358,13 +380,13 @@ func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request
 // comments aren't tied to a review). Used both for starting a new top-level
 // comment and for "replying" to one, since GitHub doesn't thread these.
 func (s *Server) handlePRIssueCommentPost(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
 		return
@@ -391,13 +413,13 @@ func (s *Server) handlePRIssueCommentPost(w http.ResponseWriter, r *http.Request
 // draft-then-submit review flow, matching GitHub's own dedicated reply
 // endpoint, which posts right away).
 func (s *Server) handlePRReviewCommentReply(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
 		return
@@ -421,10 +443,10 @@ func (s *Server) handlePRReviewCommentReply(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	p := s.pr
 	switch r.Method {
 	case http.MethodGet:
 		p.mu.Lock()
@@ -465,14 +487,14 @@ func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
-	p := s.pr
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i, c := range p.comments {
@@ -485,13 +507,13 @@ func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePRSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
 	if !localPost(w, r) {
 		return
 	}
-	p := s.pr
 	if p.token == "" {
 		fail(w, http.StatusForbidden, "no auth token configured; review submission is read-only")
 		return

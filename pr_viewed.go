@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -59,17 +60,19 @@ func loadViewedFile() map[string]map[string]bool {
 	return m
 }
 
-func saveViewedFileLocked(m map[string]map[string]bool) {
+func saveViewedFileLocked(m map[string]map[string]bool) error {
 	p := viewedFilePath()
 	if p == "" {
-		return
+		return errors.New("no home directory to store viewed state in")
 	}
-	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(p, append(data, '\n'), 0o644)
+	return os.WriteFile(p, append(data, '\n'), 0o644)
 }
 
 type prFileEntry struct {
@@ -79,12 +82,20 @@ type prFileEntry struct {
 	Deletions int    `json:"deletions"`
 }
 
-// prChangedFiles lists files changed against base in root's worktree.
+// prChangedFiles lists files changed against base: in root's working tree
+// when head is "", otherwise between the base and head revs (preview mode).
 // Uses --name-status for the letter and --numstat for counts; binary files
 // report "-" counts which parse as 0. Fails quiet -> empty slice (never nil,
 // so the client always gets JSON []).
-func prChangedFiles(root, base string) []prFileEntry {
-	out, err := exec.Command("git", "-C", root, "diff", "--name-status", "-z", base).Output()
+func prChangedFiles(root, base, head string) []prFileEntry {
+	revs := []string{base}
+	if head != "" {
+		revs = append(revs, head)
+	}
+	diffArgs := func(flags ...string) []string {
+		return append(append([]string{"-C", root, "diff"}, flags...), revs...)
+	}
+	out, err := exec.Command("git", diffArgs("--name-status", "-z")...).Output()
 	if err != nil {
 		return []prFileEntry{}
 	}
@@ -109,14 +120,17 @@ func prChangedFiles(root, base string) []prFileEntry {
 		}
 	}
 	counts := map[string][2]int{}
-	if numOut, err := exec.Command("git", "-C", root, "diff", "--numstat", "-z", base).Output(); err == nil {
-		nparts := strings.Split(string(numOut), "\x00")
-		for i := 0; i+2 < len(nparts); i += 3 {
-			adds, _ := strconv.Atoi(nparts[i])
-			dels, _ := strconv.Atoi(nparts[i+1])
-			if nparts[i+2] != "" {
-				counts[nparts[i+2]] = [2]int{adds, dels}
+	// Without -z renames print as "old => new"; numstat is only used for
+	// counts, so plain lines keyed by the final path are enough.
+	if numOut, err := exec.Command("git", diffArgs("--numstat", "--no-renames")...).Output(); err == nil {
+		for _, line := range strings.Split(string(numOut), "\n") {
+			f := strings.SplitN(line, "\t", 3)
+			if len(f) != 3 {
+				continue
 			}
+			adds, _ := strconv.Atoi(f[0])
+			dels, _ := strconv.Atoi(f[1])
+			counts[f[2]] = [2]int{adds, dels}
 		}
 	}
 	entries := make([]prFileEntry, 0, len(statusOf))
@@ -137,24 +151,21 @@ func prChangedFiles(root, base string) []prFileEntry {
 }
 
 func (s *Server) handlePRFiles(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	base := s.diffBase
-	if base == "" {
-		base = "HEAD"
-	}
-	writeJSON(w, map[string]any{"files": prChangedFiles(s.ix.Root(), base)})
+	writeJSON(w, map[string]any{"files": prChangedFiles(s.ix.Root(), p.diffBase, p.previewRev())})
 }
 
 // handlePRDetails returns the live PR description (raw + rendered) and commit
 // list for the in-app overview page -- the only place hosting comment inputs.
 // Always live, never cached: the description may change while reviewing.
 func (s *Server) handlePRDetails(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	p := s.pr
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	d, err := p.provider.FetchDetails(ctx, p.target, p.token)
@@ -169,10 +180,10 @@ func (s *Server) handlePRDetails(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePRViewed(w http.ResponseWriter, r *http.Request) {
-	if !s.prOrFail(w) {
+	p, ok := s.prOrFail(w)
+	if !ok {
 		return
 	}
-	p := s.pr
 	p.mu.Lock()
 	key := viewedKey(p.target)
 	p.mu.Unlock()
@@ -213,8 +224,12 @@ func (s *Server) handlePRViewed(w http.ResponseWriter, r *http.Request) {
 		} else {
 			delete(v, path)
 		}
-		saveViewedFileLocked(m)
+		err := saveViewedFileLocked(m)
 		viewedMu.Unlock()
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "could not save viewed state: "+err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"ok": true})
 	default:
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")

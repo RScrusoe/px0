@@ -223,6 +223,18 @@ export async function setSidebarMode(mode) {
   updateSidebarToggleState();
   const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
 
+  const btnPRs = $('#btn-prs');
+  const prsPanel = $('#prs-panel');
+  const showPRs = mode === 'prs';
+  btnPRs?.classList.toggle('active', showPRs);
+  if (prsPanel) prsPanel.hidden = !showPRs;
+  treeEl.hidden = showPRs;
+  if (showPRs) {
+    btnFiles?.classList.remove('active');
+    btnChanged?.classList.remove('active');
+    return;
+  }
+
   if (mode === 'git' && hasGitChanges) {
     treeEl.classList.add('changed-only');
     btnChanged?.classList.add('active');

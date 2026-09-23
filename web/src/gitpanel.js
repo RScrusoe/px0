@@ -65,7 +65,9 @@ export function updateGitPanel(payload) {
   updateGitPanelVisibility();
   const branchEl = $('#git-branch');
   if (branchEl) {
-    const branch = S.meta?.pr ? S.meta.pr.head + ' (PR review)' : (payload?.branch || '');
+    // A preview never touches the working tree, so the git panel keeps showing the real branch.
+    const prWorktree = S.meta?.pr && S.meta.pr.mode !== 'preview' && S.meta.pr.mode !== 'checkout';
+    const branch = prWorktree ? S.meta.pr.head + ' (PR review)' : (payload?.branch || '');
     branchEl.textContent = branch;
     branchEl.title = branch;
   }

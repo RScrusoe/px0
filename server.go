@@ -44,7 +44,8 @@ type Server struct {
 	ix         *Index
 	lsp        *lspManager
 	agent      *agentManager // nil unless main wires editing for this session
-	pr         *prSession    // nil unless main launched this process as `px0 pr ...`
+	prMu       sync.RWMutex  // guards pr and diffBase, which change at runtime as PRs are opened/closed
+	pr         *prSession    // active PR review: `px0 <pr-url>`, or a PR opened from the sidebar list
 	diffBase   string        // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
 	gitWatcher *GitWatcher
 	mux        *http.ServeMux
@@ -113,6 +114,11 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/pr/existing-comments", s.handlePRExistingComments)
 	s.mux.HandleFunc("/api/pr/comments/issue", s.handlePRIssueCommentPost)
 	s.mux.HandleFunc("/api/pr/comments/review-reply", s.handlePRReviewCommentReply)
+	s.mux.HandleFunc("/api/prs/list", s.handlePRList)
+	s.mux.HandleFunc("/api/prs/open", s.handlePROpen)
+	s.mux.HandleFunc("/api/prs/close", s.handlePRClose)
+	s.mux.HandleFunc("/api/prs/checkout", s.handlePRCheckout)
+	s.mux.HandleFunc("/api/prs/return", s.handlePRReturn)
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -318,15 +324,8 @@ func (s *Server) SetAgent(a *agentManager) {
 // against the PR's merge-base instead of HEAD, and the /api/pr/* endpoints
 // become live. Unset (nil) for a normal workspace.
 func (s *Server) SetPR(p *prSession) {
-	s.pr = p
 	if p != nil {
-		s.diffBase = p.diffBase
-		if s.ix != nil {
-			s.ix.SetDiffBase(p.diffBase)
-		}
-		if s.gitWatcher != nil {
-			s.gitWatcher.Trigger()
-		}
+		s.setActivePR(p)
 	}
 }
 
@@ -396,25 +395,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"agentPinned": s.agent.Pinned(),
 		"agents":      []agentHarness{},
 	}
-	if s.pr != nil {
-		p := s.pr
-		p.mu.Lock()
-		meta["pr"] = map[string]any{
-			"number":          p.meta.Number,
-			"title":           p.meta.Title,
-			"author":          p.meta.Author,
-			"base":            p.meta.BaseRef,
-			"head":            p.meta.HeadRef,
-			"state":           p.meta.State,
-			"merged":          p.meta.Merged,
-			"mergedAt":        p.meta.MergedAt,
-			"writeAccess":     p.writeAccess,
-			"readOnly":        p.token == "",
-			"draftCount":      len(p.comments),
-			"diffBaseWarning": p.diffBaseWarning,
-			"url":             p.target.URL,
-		}
-		p.mu.Unlock()
+	if p := s.curPR(); p != nil {
+		meta["pr"] = p.metaJSON()
 	}
 	writeJSON(w, meta)
 }
@@ -676,6 +658,11 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
+	pr := s.curPR()
+	previewAbs, preview := pr.previewFile(rel)
+	if preview {
+		abs = previewAbs
+	}
 	st, err := os.Stat(abs)
 	if err != nil {
 		fail(w, 404, err.Error())
@@ -712,7 +699,11 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	_, coming := d.Exact()
 	diffAvail := false
 	if gitAvailable(s.ix.Root()) {
-		diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
+		diffAvail = s.fileDiff(pr, rel, preview, 0) != ""
+	}
+	lspInfo := s.lspBrief(rel)
+	if preview {
+		lspInfo = map[string]any{"state": "preview", "server": ""}
 	}
 	writeJSON(w, map[string]any{
 		"path": rel, "lang": d.Lang, "total": d.Total, "maxCols": d.MaxCols,
@@ -720,7 +711,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		"exact": exact, "refine": !exact && coming,
 		"markdown":      isMarkdown(rel),
 		"diffAvailable": diffAvail,
-		"lsp":           s.lspBrief(rel),
+		"lsp":           lspInfo,
+		"prPreview":     preview,
 	})
 }
 
@@ -732,6 +724,9 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Evict(abs)
+	if previewAbs, ok := s.curPR().previewFile(rel); ok {
+		Evict(previewAbs)
+	}
 	s.lsp.CloseDoc(abs, rel)
 	debug.FreeOSMemory()
 	writeJSON(w, map[string]any{"ok": true, "path": rel})
@@ -759,12 +754,13 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
-	var diff string
+	pr := s.curPR()
+	_, preview := pr.previewFile(rel)
+	ctxLines := 0
 	if r.URL.Query().Get("full") == "1" {
-		diff = gitDiffAgainstContext(s.ix.Root(), rel, s.diffBase, 100000)
-	} else {
-		diff = gitDiffAgainst(s.ix.Root(), rel, s.diffBase)
+		ctxLines = 100000
 	}
+	diff := s.fileDiff(pr, rel, preview, ctxLines)
 	if uiVerbose {
 		status := "clean"
 		if diff != "" {
@@ -776,6 +772,15 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"path": rel, "diff": diff, "available": diff != ""})
 }
 
+// fileDiff diffs rel against the active base: between the PR's merge-base
+// and head revs for a previewed PR file, otherwise against the working tree.
+func (s *Server) fileDiff(pr *prSession, rel string, preview bool, ctxLines int) string {
+	if preview {
+		return gitDiffRevs(s.ix.Root(), rel, pr.diffBase, pr.previewRev(), ctxLines)
+	}
+	return gitDiffAgainstContext(s.ix.Root(), rel, s.curDiffBase(), ctxLines)
+}
+
 // handleGutter returns per-file changed-line ranges (new-file line numbers) for
 // a VS Code-style change gutter. available is false (200, empty arrays) when
 // git is off/absent or the file is unchanged/untracked; never 500 for those.
@@ -785,7 +790,9 @@ func (s *Server) handleGutter(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
-	added, modified, deleted := gitHunksAgainst(s.ix.Root(), rel, s.diffBase)
+	pr := s.curPR()
+	_, preview := pr.previewFile(rel)
+	added, modified, deleted := gitHunks(s.fileDiff(pr, rel, preview, 0))
 	nz := func(v []int) []int { // marshal as [] not null
 		if v == nil {
 			return []int{}
@@ -1015,8 +1022,8 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	if !localPost(w, r) {
 		return
 	}
-	if s.pr != nil {
-		if err := s.pr.Push(); err != nil {
+	if p := s.curPR(); p != nil && p.previewRev() == "" {
+		if err := p.Push(); err != nil {
 			fail(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -1044,8 +1051,8 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 	if !localPost(w, r) {
 		return
 	}
-	if s.pr != nil {
-		info, err := s.pr.Pull()
+	if p := s.curPR(); p != nil && p.previewRev() == "" {
+		info, err := p.Pull()
 		if err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, errPRDiverged) {
@@ -1054,15 +1061,7 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 			fail(w, status, err.Error())
 			return
 		}
-		s.pr.mu.Lock()
-		s.diffBase = s.pr.diffBase
-		s.pr.mu.Unlock()
-		if s.ix != nil {
-			s.ix.SetDiffBase(s.diffBase)
-		}
-		if s.gitWatcher != nil {
-			s.gitWatcher.Trigger()
-		}
+		s.setActivePR(p)
 		writeJSON(w, map[string]any{"ok": true, "message": info})
 		return
 	}

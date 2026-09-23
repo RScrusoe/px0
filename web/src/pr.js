@@ -1,7 +1,10 @@
 // web/src/pr.js
-// GitHub PR review: shown only when this process was launched as `px0 pr ...`
-// (S.meta.pr, set by main.go/pr.go). A persistent bar above the tabs shows
-// the PR and hosts Approve/Request Changes/Comment; selecting a diff line and
+// GitHub PR review. A review is active when S.meta.pr is set -- either this
+// process was launched as `px0 <pr-url>`, or one of the repo's open PRs was
+// opened from the sidebar's Pull Requests view (pr_repo.go), in which case it
+// starts as a read-only preview and can be checked out explicitly. A bar
+// above the tabs shows the PR and its file checklist; the overview page
+// (click the title) hosts every review/comment input. Selecting a diff line and
 // pressing Alt+R (or the footer/context-menu action) drafts an inline review
 // comment. Everything here talks to /api/pr/*; nothing is stored client-side
 // beyond what's needed to repaint -- a page refresh re-fetches the server's
@@ -12,8 +15,9 @@ import { setReviewHandler, SEL_MENU_ITEMS } from './selbar.js';
 import { diffview, setPRSyncHandler, syncDiffView, isFullDiff, setFullDiff, scrollToFirstChange, setDiffMode, layoutPref } from './diff.js';
 import { sanitizeHTML } from './markdown.js';
 import { reloadWorkspace } from './agent.js';
-import { openFile } from './tabs.js';
+import { openFile, reloadOpenTabs } from './tabs.js';
 import { layout, render } from './renderer.js';
+import { refreshTree, setSidebarMode } from './tree.js';
 
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
@@ -23,21 +27,68 @@ let reviewComments = [];  // inline diff-line comments, already posted (fetched 
 const prBar = () => $('#pr-bar');
 const list = () => $('#pr-comment-list');
 
-export function initPR() {
-  if (!S.meta || !S.meta.pr) return;
-  meta = S.meta.pr;
-  document.body.classList.add('pr-mode');
+const REVIEW_MENU_ITEM = { sel: 'review-comment', label: 'Add Review Comment', keys: 'Alt+R' };
 
-  SEL_MENU_ITEMS.push({ sel: 'review-comment', label: 'Add Review Comment', keys: 'Alt+R' });
+export function initPR() {
+  if (!S.meta) return;
   setReviewHandler(openCommentComposer);
-  setPRSyncHandler(renderMarkersForActiveDoc);
+  setPRSyncHandler(onDiffSync);
   injectFooterButton();
   wireBarButtons();
   wireCommentsPanel();
+  initChecklist();
+  initPRList();
+  trackBarHeight();
+  if (S.meta.pr) enterPR(S.meta.pr);
+}
+
+// #view-switches is absolutely positioned over the tab row, so it must drop
+// below the bar, whose height varies with the files checklist.
+function trackBarHeight() {
+  const b = prBar();
+  if (!b) return;
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--pr-bar-h', (b.hidden ? 0 : b.offsetHeight) + 'px');
+  }).observe(b);
+}
+
+// Starts (or switches to) reviewing a PR without a page reload.
+function enterPR(m) {
+  meta = m;
+  S.meta.pr = m;
+  comments = [];
+  issueComments = [];
+  reviewComments = [];
+  prFiles = [];
+  viewed = {};
+  expandedKeys.clear();
+  document.body.classList.add('pr-mode');
+  if (!SEL_MENU_ITEMS.includes(REVIEW_MENU_ITEM)) SEL_MENU_ITEMS.push(REVIEW_MENU_ITEM);
+  const panel = $('#pr-comments-panel');
+  if (panel) panel.hidden = false;
   renderBar();
+  renderCommentsPanel();
   refreshComments();
   refreshExistingComments();
-  initChecklist();
+  refreshChecklist();
+  renderPRList();
+  layout(); render();
+}
+
+function leavePR() {
+  meta = null;
+  if (S.meta) delete S.meta.pr;
+  document.body.classList.remove('pr-mode');
+  const i = SEL_MENU_ITEMS.indexOf(REVIEW_MENU_ITEM);
+  if (i >= 0) SEL_MENU_ITEMS.splice(i, 1);
+  closeAllComposers();
+  closePRPage();
+  for (const id of ['#pr-bar', '#pr-comments-panel']) {
+    const el = $(id);
+    if (el) el.hidden = true;
+  }
+  renderPRList();
+  layout(); render();
 }
 
 // Re-fetches PR metadata and comments after an external change to the
@@ -122,19 +173,35 @@ function renderBar() {
     const hasApplicable = comments.some(c => c.path && c.line && c.body?.trim());
     batchBtn.hidden = !hasApplicable;
   }
-  const reqBtn = $('#pr-submit-request-changes');
-  const appBtn = $('#pr-submit-approve');
-  if (reqBtn) reqBtn.hidden = !meta.writeAccess;
-  if (appBtn) appBtn.hidden = !meta.writeAccess;
-  const cmtBtn = $('#pr-submit-comment');
-  if (cmtBtn) cmtBtn.disabled = meta.readOnly;
+  const preview = meta.mode === 'preview';
+  if (batchBtn && preview) batchBtn.hidden = true;
+  const modeEl = $('#pr-mode');
+  if (modeEl) {
+    modeEl.className = 'pr-mode-pill ' + (meta.mode || 'worktree');
+    modeEl.textContent = preview ? 'Preview' : meta.mode === 'checkout' ? 'Checked out' : 'Worktree';
+    modeEl.title = preview
+      ? 'Read-only preview straight from git objects; your working tree is untouched. Check out to edit or use go-to-definition.'
+      : meta.mode === 'checkout'
+        ? 'This repo is on branch ' + meta.branch + ' at the PR head: editing, LSP, and go-to-definition work.'
+        : 'Checked out in a temporary worktree.';
+  }
+  const co = $('#pr-checkout');
+  if (co) co.hidden = !preview;
+  const ret = $('#pr-return');
+  if (ret) {
+    ret.hidden = meta.mode !== 'checkout';
+    const prev = meta.prevBranch || '';
+    ret.textContent = '\u21A9 ' + (/^[0-9a-f]{40}$/.test(prev) ? prev.slice(0, 7) : prev);
+  }
+  const exit = $('#pr-exit');
+  if (exit) exit.hidden = !preview;
 }
 
 function wireBarButtons() {
   $('#pr-batch-apply')?.addEventListener('click', batchApplyComments);
-  $('#pr-submit-comment')?.addEventListener('click', () => submitReview('COMMENT'));
-  $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
-  $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
+  $('#pr-checkout')?.addEventListener('click', () => switchPRMode('/api/prs/checkout', 'Checked out'));
+  $('#pr-return')?.addEventListener('click', () => switchPRMode('/api/prs/return', 'Back on your branch'));
+  $('#pr-exit')?.addEventListener('click', exitListedPR);
   // The title opens the in-app overview page (description, commits, commenting);
   // the href stays as the GitHub URL for middle-click / new-tab.
   $('#pr-link')?.addEventListener('click', e => { e.preventDefault(); openPRPage(); });
@@ -329,7 +396,11 @@ function closeAllComposers() {
 /* ---------- gutter markers on the active diff ---------- */
 
 function renderMarkersForActiveDoc() {
-  if (!diffview || diffview.hidden || !meta) return;
+  if (!diffview || diffview.hidden) return;
+  if (!meta) {
+    for (const el of diffview.querySelectorAll('.pr-comment-mark')) el.remove();
+    return;
+  }
   const d = doc_();
   if (!d) return;
   const draftsByKey = new Map();
@@ -392,7 +463,6 @@ function toggleAccordion(item) {
 
 function wireCommentsPanel() {
   const panel = $('#pr-comments-panel');
-  if (panel) panel.hidden = false;
 
   $('#pr-comments-collapse')?.addEventListener('click', () => {
     panel?.classList.toggle('collapsed');
@@ -707,16 +777,21 @@ function renderChecklist() {
   const hintEl = $('#pr-files-hint');
   const done = prFiles.filter(f => viewed[f.path]).length;
   if (progEl) progEl.textContent = done + '/' + prFiles.length;
+  const fill = $('#pr-files-bar-fill');
+  if (fill) fill.style.width = (prFiles.length ? Math.round(100 * done / prFiles.length) : 0) + '%';
+  renderActiveFileHighlight();
   if (hintEl) hintEl.textContent = prFiles.length ? (done === prFiles.length ? 'all reviewed' : (prFiles.length - done) + ' left') : '';
   if (!listEl) return;
   if (!prFiles.length) {
     listEl.innerHTML = '<div class="pr-comments-empty">No changed files.</div>';
     return;
   }
+  const active = doc_()?.path;
   listEl.innerHTML = prFiles.map(f => {
     const v = !!viewed[f.path];
+    const cur = f.path === active ? ' current' : '';
     const counts = (f.additions || f.deletions) ? ' <span class="pr-file-counts">+' + f.additions + '/-' + f.deletions + '</span>' : '';
-    return '<div class="pr-file-row' + (v ? ' done' : '') + '" data-pr-open="' + esc(f.path) + '">' +
+    return '<div class="pr-file-row' + (v ? ' done' : '') + cur + '" data-pr-open="' + esc(f.path) + '">' +
       '<input type="checkbox" data-pr-file="' + esc(f.path) + '"' + (v ? ' checked' : '') + '>' +
       '<span class="pr-file-status pr-st-' + esc(f.status || 'M') + '">' + esc(f.status || 'M') + '</span>' +
       '<span class="pr-file-name" title="Open diff">' + esc(f.path) + '</span>' +
@@ -724,13 +799,26 @@ function renderChecklist() {
   }).join('');
 }
 
+function renderActiveFileHighlight() {
+  const active = doc_()?.path;
+  for (const row of document.querySelectorAll('#pr-files-list .pr-file-row')) {
+    row.classList.toggle('current', row.dataset.prOpen === active);
+  }
+}
+
+function onDiffSync() {
+  renderMarkersForActiveDoc();
+  if (meta) renderActiveFileHighlight();
+}
+
 async function setViewed(path, on) {
-  viewed[path] = on;
-  if (!on) delete viewed[path];
+  if (on) viewed[path] = true; else delete viewed[path];
   renderChecklist();
   try {
     await apiPostJson('/api/pr/viewed', { path, viewed: on });
   } catch (e) {
+    if (on) delete viewed[path]; else viewed[path] = true;
+    renderChecklist();
     showToast('!', e.message || 'Could not save viewed state');
   }
 }
@@ -776,6 +864,8 @@ async function openPRPage() {
   $('#pr-page-badge').textContent = '#' + meta.number;
   $('#pr-page-title').textContent = meta.title;
   $('#pr-page-refs').textContent = meta.base + ' ← ' + meta.head;
+  const gh = $('#pr-page-github');
+  if (gh) gh.href = meta.url || '#';
   const reqBtn = $('#pr-page-submit-request-changes');
   const appBtn = $('#pr-page-submit-approve');
   if (reqBtn) reqBtn.hidden = !meta.writeAccess;
@@ -824,4 +914,112 @@ function injectFooterButton() {
   btn.title = withKeys('Add a review comment on this selection ({Alt+R})');
   btn.innerHTML = '<span class="footer-btn-label">Comment</span><kbd class="footer-kbd">' + esc(keyLabel('Alt+R')) + '</kbd>';
   sel.append(btn);
+}
+
+// ---- Pull Requests sidebar: this repo's open PRs, previewed without checkout ----
+
+let prList = null;  // last /api/prs/list payload
+
+function initPRList() {
+  $('#btn-prs')?.addEventListener('click', () => setSidebarMode('prs'));
+  $('#prs-refresh')?.addEventListener('click', loadPRList);
+  $('#prs-list')?.addEventListener('click', e => {
+    const row = e.target.closest('[data-pr-number]');
+    if (row) openListedPR(+row.dataset.prNumber);
+  });
+  loadPRList();
+}
+
+async function loadPRList() {
+  const listEl = $('#prs-list');
+  if (!listEl) return;
+  if (!prList) listEl.innerHTML = '<div class="prs-empty">Loading pull requests…</div>';
+  try {
+    prList = await api('/api/prs/list');
+  } catch (e) {
+    prList = { error: e.message || 'Could not load pull requests', prs: [] };
+  }
+  renderPRList();
+}
+
+function renderPRList() {
+  const listEl = $('#prs-list');
+  if (!listEl || !prList) return;
+  const repoEl = $('#prs-repo');
+  if (repoEl) repoEl.textContent = prList.repo || 'Pull Requests';
+  const activeNum = meta?.number || 0;
+  if (!prList.repo) {
+    listEl.innerHTML = '<div class="prs-empty">No GitHub <code>origin</code> remote in this repo.</div>';
+    return;
+  }
+  if (!prList.token) {
+    listEl.innerHTML = '<div class="prs-empty">Sign in to GitHub to see open pull requests.<pre>gh auth login</pre></div>';
+    return;
+  }
+  if (prList.error) {
+    listEl.innerHTML = '<div class="prs-empty">' + esc(prList.error) + '</div>';
+    return;
+  }
+  const prs = prList.prs || [];
+  if (!prs.length) {
+    listEl.innerHTML = '<div class="prs-empty">No open pull requests.</div>';
+    return;
+  }
+  listEl.innerHTML = prs.map(pr =>
+    '<div class="prs-row' + (pr.number === activeNum ? ' active' : '') + '" data-pr-number="' + pr.number + '" title="' + esc(pr.title) + '">' +
+      '<div class="prs-row-title"><span class="prs-num">#' + pr.number + '</span>' +
+        '<span class="prs-title">' + esc(pr.title) + '</span>' +
+        (pr.draft ? '<span class="prs-draft">Draft</span>' : '') + '</div>' +
+      '<div class="prs-row-meta"><span>' + esc(pr.author || '') + '</span><span class="prs-branch">' + esc(pr.head || '') + '</span></div>' +
+    '</div>').join('');
+}
+
+async function openListedPR(number) {
+  if (meta?.number === number) return;
+  if (meta?.mode === 'checkout') {
+    showToast('!', 'Return to your branch before opening another PR');
+    return;
+  }
+  const row = document.querySelector('[data-pr-number="' + number + '"]');
+  row?.classList.add('loading');
+  try {
+    const m = await apiPostJson('/api/prs/open', { number });
+    enterPR(m);
+    await reloadOpenTabs();
+    await refreshChecklist();
+    if (prFiles.length) openFile(prFiles[0].path);
+  } catch (e) {
+    showToast('!', e.message || 'Could not open PR');
+  } finally {
+    row?.classList.remove('loading');
+  }
+}
+
+async function exitListedPR() {
+  try {
+    await apiPostJson('/api/prs/close', {});
+    leavePR();
+    await reloadOpenTabs();
+  } catch (e) {
+    showToast('!', e.message || 'Could not close PR');
+  }
+}
+
+async function switchPRMode(url, doneMsg) {
+  const btns = ['#pr-checkout', '#pr-return'].map(id => $(id)).filter(Boolean);
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    const m = await apiPostJson(url, {});
+    meta = m;
+    S.meta.pr = m;
+    renderBar();
+    await refreshTree();
+    await reloadOpenTabs();
+    await refreshChecklist();
+    showToast('\u2713', doneMsg + (m.mode === 'checkout' ? ' ' + m.branch : ''));
+  } catch (e) {
+    showToast('!', e.message || 'Could not switch');
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+  }
 }

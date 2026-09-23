@@ -18,8 +18,17 @@
 <div id="app">
   <!-- SECTION: Sidebar (File explorer tree) -->
   <aside id="side">
-    <header class="panel-head"><span id="root-name">-</span><span class="panel-actions"><div class="sidebar-toggle" role="group" aria-label="Explorer view mode"><button id="btn-files" class="toggle-btn active" title="File Explorer (show all files)" aria-label="File Explorer"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button><button id="btn-changed" class="toggle-btn" title="Git changes (show changed files only)" aria-label="Git changes"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 3.5-6 3.5"/></svg></button></div><button id="btn-reindex" class="mini" title="Re-index"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></span></header>
+    <header class="panel-head"><span id="root-name">-</span><span class="panel-actions"><div class="sidebar-toggle" role="group" aria-label="Explorer view mode"><button id="btn-files" class="toggle-btn active" title="File Explorer (show all files)" aria-label="File Explorer"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button><button id="btn-changed" class="toggle-btn" title="Git changes (show changed files only)" aria-label="Git changes"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 3.5-6 3.5"/></svg></button><button id="btn-prs" class="toggle-btn" title="Pull requests (this repo)" aria-label="Pull requests"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4"/><path d="M13 4l-2 2 2 2"/></svg></button></div><button id="btn-reindex" class="mini" title="Re-index"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></span></header>
     <div class="panel-body" id="tree"></div>
+    <!-- Open PRs of this repo (web/src/pr.js); replaces the tree while active -->
+    <div id="prs-panel" class="prs-panel" hidden>
+      <div class="prs-head">
+        <span id="prs-repo" class="prs-repo"></span>
+        <span class="grow"></span>
+        <button id="prs-refresh" class="mini" title="Refresh pull requests" aria-label="Refresh pull requests"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+      </div>
+      <div id="prs-list" class="prs-list"></div>
+    </div>
     <div id="git-panel" class="git-panel" hidden>
       <div id="git-panel-resizer" class="git-panel-resizer" title="Drag to resize"></div>
       <div class="git-panel-head">
@@ -71,30 +80,29 @@
     <!-- PR review bar: shown only when this session is `px0 pr ...` (web/src/pr.js) -->
     <div id="pr-bar" class="pr-bar" hidden>
       <div class="pr-bar-row">
-        <a id="pr-link" class="pr-link" target="_blank" rel="noopener noreferrer" title="Open on GitHub">
+        <a id="pr-link" class="pr-link" title="Open PR overview (description, commits, review)">
           <span id="pr-badge" class="pr-badge"></span>
           <span id="pr-title" class="pr-title"></span>
         </a>
+        <span id="pr-mode" class="pr-mode-pill"></span>
         <span id="pr-merged-badge" class="pr-merged-badge" hidden>Merged</span>
         <span id="pr-refs" class="pr-refs"></span>
         <span class="grow"></span>
         <span id="pr-diff-warning" class="pr-diff-warning" hidden>&#9888; diff base unresolved</span>
-        <span id="pr-readonly-note" class="pr-readonly-note" hidden>Read-only &middot; no GitHub token configured</span>
+        <span id="pr-readonly-note" class="pr-readonly-note" hidden>Read-only</span>
         <span id="pr-draft-count" class="pr-draft-count"></span>
-      </div>
-      <div class="pr-bar-row pr-review-row">
-        <span class="grow"></span>
-        <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">⚡ Batch Apply</button>
-        <button id="pr-submit-comment" class="footer-btn" title="Submit as a plain comment, no verdict">Comment</button>
-        <button id="pr-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
-        <button id="pr-submit-approve" class="footer-btn" hidden title="Approve this PR">Approve</button>
+        <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">&#9889; Batch Apply</button>
+        <button id="pr-checkout" class="footer-btn pr-btn-primary" hidden title="Switch this repo onto the PR head to edit, run, and use go-to-definition">Checkout</button>
+        <button id="pr-return" class="footer-btn" hidden title="Switch back to the branch you were on"></button>
+        <button id="pr-exit" class="pr-exit" hidden title="Close review" aria-label="Close review">&#10005;</button>
       </div>
       <div class="pr-bar-row pr-files-row">
         <button id="pr-files-toggle" class="footer-btn" title="Show changed files checklist">Files <span id="pr-files-progress">0/0</span> &#9662;</button>
-        <span class="grow"></span>
+        <span id="pr-files-bar" class="pr-files-bar"><span id="pr-files-bar-fill"></span></span>
         <span id="pr-files-hint" class="pr-files-hint"></span>
-        <button id="pr-files-prev" class="footer-btn" title="Open previous unchecked file">Prev</button>
-        <button id="pr-files-next" class="footer-btn" title="Open next unchecked file">Next</button>
+        <span class="grow"></span>
+        <button id="pr-files-prev" class="footer-btn" title="Open previous unchecked file">&#8592; Prev</button>
+        <button id="pr-files-next" class="footer-btn" title="Open next unchecked file">Next &#8594;</button>
         <button id="pr-diff-full" class="footer-btn" title="Toggle full-file diff vs hunks only">Full</button>
       </div>
       <div id="pr-files-list" class="pr-files-list" hidden></div>
@@ -294,6 +302,7 @@
         <span id="pr-page-title" class="pr-page-title"></span>
         <span id="pr-page-refs" class="pr-refs"></span>
         <span class="grow"></span>
+        <a id="pr-page-github" class="footer-btn" target="_blank" rel="noopener noreferrer" title="Open on GitHub">GitHub &#8599;</a>
         <button id="pr-page-close" class="footer-btn" title="Back to review (Esc)">Back to review</button>
       </div>
       <div class="pr-page-body">
