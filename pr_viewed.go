@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // pr_viewed.go — POC: file-by-file PR review state.
@@ -143,6 +145,27 @@ func (s *Server) handlePRFiles(w http.ResponseWriter, r *http.Request) {
 		base = "HEAD"
 	}
 	writeJSON(w, map[string]any{"files": prChangedFiles(s.ix.Root(), base)})
+}
+
+// handlePRDetails returns the live PR description (raw + rendered) and commit
+// list for the in-app overview page -- the only place hosting comment inputs.
+// Always live, never cached: the description may change while reviewing.
+func (s *Server) handlePRDetails(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	p := s.pr
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	d, err := p.provider.FetchDetails(ctx, p.target, p.token)
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if d.Commits == nil {
+		d.Commits = []PRCommit{}
+	}
+	writeJSON(w, d)
 }
 
 func (s *Server) handlePRViewed(w http.ResponseWriter, r *http.Request) {

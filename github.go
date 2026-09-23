@@ -70,6 +70,10 @@ func (g *GitHubProvider) FetchComments(ctx context.Context, target PRTarget, tok
 	return fetchComments(ctx, target.Owner, target.Repo, target.Number, token)
 }
 
+func (g *GitHubProvider) FetchDetails(ctx context.Context, target PRTarget, token string) (PRDetails, error) {
+	return fetchDetails(ctx, target.Owner, target.Repo, target.Number, token)
+}
+
 func (g *GitHubProvider) PostIssueComment(ctx context.Context, target PRTarget, token, body string) (PRComment, error) {
 	return postIssueComment(ctx, target.Owner, target.Repo, target.Number, token, body)
 }
@@ -365,6 +369,67 @@ func fetchComments(ctx context.Context, owner, repo string, num int, token strin
 		}
 	}
 	return issue, review, nil
+}
+
+// fetchDetails returns the live PR description (raw + server-rendered HTML)
+// and the commit list for the in-app overview page.
+func fetchDetails(ctx context.Context, owner, repo string, num int, token string) (PRDetails, error) {
+	var d PRDetails
+	resp, err := githubRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, num), token, nil)
+	if err != nil {
+		return d, err
+	}
+	var pr struct {
+		Body string `json:"body"`
+	}
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+			resp.Body.Close()
+			return d, err
+		}
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return d, fmt.Errorf("github: fetch PR #%d details: %s", num, resp.Status)
+	}
+	d.Body = pr.Body
+	if html, err := renderMarkdown([]byte(pr.Body)); err == nil {
+		d.BodyHTML = html
+	}
+	raw, err := githubGetAllPages(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?per_page=100", owner, repo, num), token)
+	if err != nil {
+		return d, err
+	}
+	for _, r := range raw {
+		var c struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Message string `json:"message"`
+				Author  struct {
+					Name string `json:"name"`
+					Date string `json:"date"`
+				} `json:"author"`
+			} `json:"commit"`
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		}
+		if err := json.Unmarshal(r, &c); err != nil {
+			continue
+		}
+		author := c.Author.Login
+		if author == "" {
+			author = c.Commit.Author.Name
+		}
+		d.Commits = append(d.Commits, PRCommit{
+			SHA: c.SHA, Message: c.Commit.Message,
+			Author: author, Date: c.Commit.Author.Date,
+		})
+	}
+	if d.Commits == nil {
+		d.Commits = []PRCommit{}
+	}
+	return d, nil
 }
 
 // postIssueComment posts a new top-level PR conversation comment. GitHub's

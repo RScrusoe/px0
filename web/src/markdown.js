@@ -153,6 +153,12 @@ function mdSanitize(html, docPath) {
   return frag;
 }
 
+// Sanitizes server-rendered HTML (e.g. a PR description) for insertion
+// anywhere outside a file preview. No workspace paths involved.
+export function sanitizeHTML(html) {
+  return mdSanitize(html || '', '');
+}
+
 /* A reference without a scheme names a file in the workspace, relative to the
    Markdown file's directory, or to the root when it starts with /, as on GitHub.
    Returns null for anything that does not resolve that way. */

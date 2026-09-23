@@ -10,6 +10,7 @@ import { $, S, doc_, esc, api, apiPostJson, keyLabel, withKeys } from './state.j
 import { showToast } from './ui.js';
 import { setReviewHandler, SEL_MENU_ITEMS } from './selbar.js';
 import { diffview, setPRSyncHandler, syncDiffView, isFullDiff, setFullDiff, scrollToFirstChange, setDiffMode, layoutPref } from './diff.js';
+import { sanitizeHTML } from './markdown.js';
 import { reloadWorkspace } from './agent.js';
 import { openFile } from './tabs.js';
 import { layout, render } from './renderer.js';
@@ -107,6 +108,8 @@ function renderBar() {
   $('#pr-draft-count').textContent = comments.length
     ? (comments.length + (comments.length === 1 ? ' draft comment' : ' draft comments'))
     : '';
+  const pageDraft = $('#pr-page-draft-count');
+  if (pageDraft) pageDraft.textContent = $('#pr-draft-count').textContent;
   const ro = $('#pr-readonly-note');
   if (ro) ro.hidden = !meta.readOnly;
   const dw = $('#pr-diff-warning');
@@ -125,8 +128,6 @@ function renderBar() {
   if (appBtn) appBtn.hidden = !meta.writeAccess;
   const cmtBtn = $('#pr-submit-comment');
   if (cmtBtn) cmtBtn.disabled = meta.readOnly;
-  const composeEl = $('#pr-issue-compose');
-  if (composeEl) composeEl.hidden = meta.readOnly;
 }
 
 function wireBarButtons() {
@@ -134,15 +135,22 @@ function wireBarButtons() {
   $('#pr-submit-comment')?.addEventListener('click', () => submitReview('COMMENT'));
   $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
-  $('#pr-issue-compose-send')?.addEventListener('click', sendNewIssueComment);
+  // The title opens the in-app overview page (description, commits, commenting);
+  // the href stays as the GitHub URL for middle-click / new-tab.
+  $('#pr-link')?.addEventListener('click', e => { e.preventDefault(); openPRPage(); });
+  $('#pr-page-close')?.addEventListener('click', closePRPage);
+  $('#pr-page-submit-comment')?.addEventListener('click', () => submitReview('COMMENT'));
+  $('#pr-page-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
+  $('#pr-page-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
+  $('#pr-page-issue-send')?.addEventListener('click', sendNewIssueComment);
 }
 
 async function sendNewIssueComment() {
-  const ta = $('#pr-issue-compose-body');
+  const ta = $('#pr-page-issue-body');
   if (!ta) return;
   const body = ta.value.trim();
   if (!body) return;
-  const btn = $('#pr-issue-compose-send');
+  const btn = $('#pr-page-issue-send');
   if (btn) btn.disabled = true;
   try {
     const c = await apiPostJson('/api/pr/comments/issue', { body });
@@ -223,7 +231,7 @@ async function pollPRBatch(id, count) {
 }
 
 async function submitReview(event) {
-  const bodyEl = $('#pr-review-body');
+  const bodyEl = $('#pr-page-body');
   const body = bodyEl ? bodyEl.value.trim() : '';
   if (event === 'REQUEST_CHANGES' && !body && !comments.length) {
     showToast('!', 'Add a comment or review body before requesting changes');
@@ -418,7 +426,8 @@ function wireCommentsPanel() {
   $('#pr-comments-list')?.addEventListener('click', e => {
     const replyBtn = e.target.closest('.pr-issue-comment-reply-btn');
     if (replyBtn) {
-      const ta = $('#pr-issue-compose-body');
+      openPRPage();
+      const ta = $('#pr-page-issue-body');
       if (ta) {
         const prefix = replyBtn.dataset.author ? '@' + replyBtn.dataset.author + ' ' : '';
         if (!ta.value.startsWith(prefix)) ta.value = prefix + ta.value;
@@ -756,6 +765,54 @@ async function openChecklistFile(path) {
       setTimeout(poll, 150);
     }
   }
+}
+
+/* ---------- PR overview page (title opens this; only comment inputs live here) ---------- */
+
+async function openPRPage() {
+  const page = $('#pr-page');
+  if (!page || !meta) return;
+  page.hidden = false;
+  $('#pr-page-badge').textContent = '#' + meta.number;
+  $('#pr-page-title').textContent = meta.title;
+  $('#pr-page-refs').textContent = meta.base + ' ← ' + meta.head;
+  const reqBtn = $('#pr-page-submit-request-changes');
+  const appBtn = $('#pr-page-submit-approve');
+  if (reqBtn) reqBtn.hidden = !meta.writeAccess;
+  if (appBtn) appBtn.hidden = !meta.writeAccess;
+  const cmtBtn = $('#pr-page-submit-comment');
+  if (cmtBtn) cmtBtn.disabled = meta.readOnly;
+  const issueBtn = $('#pr-page-issue-send');
+  if (issueBtn) issueBtn.disabled = meta.readOnly;
+  const desc = $('#pr-page-desc');
+  const commitsEl = $('#pr-page-commits');
+  if (desc) desc.innerHTML = '<div class="pr-comments-empty">Loading…</div>';
+  if (commitsEl) commitsEl.innerHTML = '';
+  try {
+    const d = await api('/api/pr/details');
+    if (desc) {
+      desc.replaceChildren();
+      if (d.bodyHtml) desc.append(sanitizeHTML(d.bodyHtml));
+      else desc.innerHTML = '<div class="pr-comments-empty">No description.</div>';
+    }
+    const commits = d.commits || [];
+    const countEl = $('#pr-page-commits-count');
+    if (countEl) countEl.textContent = commits.length ? '(' + commits.length + ')' : '';
+    if (commitsEl) {
+      commitsEl.innerHTML = commits.length
+        ? commits.map(c => '<div class="pr-page-commit"><span class="pr-page-sha">' + esc((c.sha || '').slice(0, 7)) + '</span>' +
+          '<span class="pr-page-msg">' + esc((c.message || '').split('\n')[0]) + '</span>' +
+          '<span class="pr-page-meta">' + esc(c.author || '') + (c.date ? ' · ' + esc(fmtTime(c.date)) : '') + '</span></div>').join('')
+        : '<div class="pr-comments-empty">No commits.</div>';
+    }
+  } catch (e) {
+    if (desc) desc.innerHTML = '<div class="pr-comments-empty">Could not load PR details.</div>';
+  }
+}
+
+function closePRPage() {
+  const page = $('#pr-page');
+  if (page) page.hidden = true;
 }
 
 function injectFooterButton() {

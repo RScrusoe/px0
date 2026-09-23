@@ -83,7 +83,7 @@
         <span id="pr-draft-count" class="pr-draft-count"></span>
       </div>
       <div class="pr-bar-row pr-review-row">
-        <textarea id="pr-review-body" class="pr-review-body" rows="1" spellcheck="false" autocomplete="off" placeholder="Leave an overall review comment (optional)..."></textarea>
+        <span class="grow"></span>
         <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">⚡ Batch Apply</button>
         <button id="pr-submit-comment" class="footer-btn" title="Submit as a plain comment, no verdict">Comment</button>
         <button id="pr-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
@@ -283,9 +283,46 @@
       </div>
       <div id="pr-comments-body" class="pr-comments-body">
         <div id="pr-comments-list" class="pr-comments-list"></div>
-        <div id="pr-issue-compose" class="pr-issue-compose">
-          <textarea id="pr-issue-compose-body" class="pr-review-body" rows="2" spellcheck="false" autocomplete="off" placeholder="Write a new PR comment..."></textarea>
-          <button id="pr-issue-compose-send" class="footer-btn">Comment</button>
+      </div>
+    </div>
+
+    <!-- PR overview page: the PR title opens this instead of GitHub. The only
+         place hosting comment inputs. web/src/pr.js owns everything in it. -->
+    <div id="pr-page" class="pr-page" hidden>
+      <div class="pr-page-head">
+        <span id="pr-page-badge" class="pr-badge"></span>
+        <span id="pr-page-title" class="pr-page-title"></span>
+        <span id="pr-page-refs" class="pr-refs"></span>
+        <span class="grow"></span>
+        <button id="pr-page-close" class="footer-btn" title="Back to review (Esc)">Back to review</button>
+      </div>
+      <div class="pr-page-body">
+        <div class="pr-page-section">
+          <div class="pr-comments-section-title">Description</div>
+          <article id="pr-page-desc" class="md"></article>
+        </div>
+        <div class="pr-page-section">
+          <div class="pr-comments-section-title">Commits <span id="pr-page-commits-count" class="pr-comments-count"></span></div>
+          <div id="pr-page-commits" class="pr-page-commits"></div>
+        </div>
+        <div class="pr-page-section">
+          <div class="pr-comments-section-title">Review</div>
+          <textarea id="pr-page-body" class="pr-review-body pr-page-input" rows="3" spellcheck="false" autocomplete="off" placeholder="Leave an overall review comment (optional)..."></textarea>
+          <div class="pr-page-actions">
+            <span id="pr-page-draft-count" class="pr-draft-count"></span>
+            <span class="grow"></span>
+            <button id="pr-page-submit-comment" class="footer-btn" title="Submit as a plain comment, no verdict">Comment</button>
+            <button id="pr-page-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
+            <button id="pr-page-submit-approve" class="footer-btn" hidden title="Approve this PR">Approve</button>
+          </div>
+        </div>
+        <div class="pr-page-section">
+          <div class="pr-comments-section-title">Conversation</div>
+          <textarea id="pr-page-issue-body" class="pr-review-body pr-page-input" rows="3" spellcheck="false" autocomplete="off" placeholder="Write a new PR comment..."></textarea>
+          <div class="pr-page-actions">
+            <span class="grow"></span>
+            <button id="pr-page-issue-send" class="footer-btn" title="Post a top-level PR comment">Comment</button>
+          </div>
         </div>
       </div>
     </div>

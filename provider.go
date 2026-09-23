@@ -32,6 +32,23 @@ type PRMeta struct {
 	HeadIsFork       bool
 }
 
+// PRCommit is one commit on the PR, newest last (forge order).
+type PRCommit struct {
+	SHA     string `json:"sha"`
+	Message string `json:"message"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
+}
+
+// PRDetails feeds the in-app PR overview page: live description (raw + rendered)
+// and the commit list. Rendered server-side with the same goldmark pipeline as
+// file previews; the client passes it through its DOM sanitizer before insert.
+type PRDetails struct {
+	Body     string     `json:"body"`
+	BodyHTML string     `json:"bodyHtml"`
+	Commits  []PRCommit `json:"commits"`
+}
+
 // PRComment is a comment already posted on the pull request, fetched
 // read-only from the forge -- distinct from pr.go's prComment, which is a
 // draft held in memory until a review is submitted. Kind is "issue" (a
@@ -78,6 +95,10 @@ type GitProvider interface {
 	// FetchComments returns every comment already posted on the PR: top-level
 	// ("issue") comments and inline ("review") comments anchored to a diff line.
 	FetchComments(ctx context.Context, target PRTarget, token string) (issue, review []PRComment, err error)
+
+	// FetchDetails returns the live PR description and commit list for the
+	// in-app overview page (the only place that hosts comment inputs).
+	FetchDetails(ctx context.Context, target PRTarget, token string) (PRDetails, error)
 
 	// PostIssueComment posts a new top-level PR comment immediately. GitHub has
 	// no threading for these, so "replying" to one is just posting a new one.

@@ -31,12 +31,14 @@ Build on px0 foundation, do not fork UI paradigm:
 
 ## 3. In scope
 - [x] Branch + this doc
-- [ ] Backend: `GET /api/pr/files` (name-status + numstat against `diffBase`)
-- [ ] Backend: `GET/POST /api/pr/viewed` + `~/.px0/pr-viewed.json` store
-- [ ] Backend: `/api/diff?full=1` via `git diff -U100000`
-- [ ] Frontend: checklist drawer, checkboxes, progress, Next/Prev, Full/Hunks toggle
-- [ ] Frontend: click-to-open full-file diff + auto-scroll to first change
-- [ ] Frontend: Approve warns when files unchecked
+- [x] Backend: `GET /api/pr/files` (name-status + numstat against `diffBase`)
+- [x] Backend: `GET/POST /api/pr/viewed` + `~/.px0/pr-viewed.json` store
+- [x] Backend: `/api/diff?full=1` via `git diff -U100000`
+- [x] Frontend: checklist drawer, checkboxes, progress, Next/Prev, Full/Hunks toggle
+- [x] Frontend: click-to-open full-file diff + auto-scroll to first change
+- [x] Frontend: Approve warns when files unchecked
+- [x] Overview page: title opens in-app page (description + commits); both comment inputs moved there, review view is comment-free
+- [x] Backend: `GET /api/pr/details` (live body + server-rendered HTML + commits)
 - [ ] `go vet` + `go test ./...` (pr-related) green, manual `go run . -dev . <pr-url>` smoke
 
 ## 4. Out of scope

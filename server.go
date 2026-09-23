@@ -103,6 +103,7 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/agent/cancel", s.handleAgentCancel)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/pr/meta", s.handlePRMeta)
+	s.mux.HandleFunc("/api/pr/details", s.handlePRDetails)
 	s.mux.HandleFunc("/api/pr/files", s.handlePRFiles)
 	s.mux.HandleFunc("/api/pr/viewed", s.handlePRViewed)
 	s.mux.HandleFunc("/api/pr/comments", s.handlePRComments)

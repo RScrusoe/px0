@@ -1924,6 +1924,29 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .pr-st-M { color: var(--accent-fg); } .pr-st-A { color: var(--s); } .pr-st-D { color: var(--err); } .pr-st-R { color: var(--m); }
 .pr-file-name { font: 12px var(--mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-file-counts { font: 11px var(--mono); color: var(--faint); flex: none; }
+
+/* ---------- PR overview page (title opens this; hosts all comment inputs) ---------- */
+.pr-page {
+  position: absolute; inset: 0; z-index: 30; overflow-y: auto;
+  background: var(--bg); padding: 28px 32px 60px;
+}
+.pr-page[hidden] { display: none; }
+.pr-page-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
+}
+.pr-page-title { font: 600 18px var(--ui); }
+.pr-page-body { max-width: 900px; display: flex; flex-direction: column; gap: 24px; }
+.pr-page-input { min-height: 64px; height: auto; font-size: 12.5px; }
+.pr-page-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.pr-page-commits { display: flex; flex-direction: column; }
+.pr-page-commit {
+  display: flex; align-items: baseline; gap: 10px; padding: 7px 4px;
+  border-bottom: 1px solid var(--line); font: 12px var(--ui);
+}
+.pr-page-sha { font: 11px var(--mono); color: var(--accent-fg); flex: none; }
+.pr-page-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-page-meta { font: 11px var(--ui); color: var(--faint); flex: none; }
 #pr-comment-list[hidden] { display: none; }
 
 #pr-comment-list {
@@ -2027,8 +2050,6 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 .pr-comment-delete-btn:hover { color: var(--err); text-decoration: underline; }
 .pr-comment-reply-row { display: flex; gap: 6px; align-items: flex-start; margin-top: 2px; }
 .pr-comment-reply-row .pr-review-body { height: 32px; resize: vertical; }
-.pr-issue-compose { flex: none; display: flex; gap: 6px; align-items: flex-start; padding: 8px 12px; border-top: 1px solid var(--line); }
-.pr-issue-compose .pr-review-body { height: 44px; resize: vertical; }
 .pr-btn-batch-apply {
   background: var(--accent);
   color: var(--accent-fg);
