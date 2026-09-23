@@ -103,6 +103,8 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/agent/cancel", s.handleAgentCancel)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/pr/meta", s.handlePRMeta)
+	s.mux.HandleFunc("/api/pr/files", s.handlePRFiles)
+	s.mux.HandleFunc("/api/pr/viewed", s.handlePRViewed)
 	s.mux.HandleFunc("/api/pr/comments", s.handlePRComments)
 	s.mux.HandleFunc("/api/pr/comments/delete", s.handlePRCommentDelete)
 	s.mux.HandleFunc("/api/pr/submit", s.handlePRSubmit)
@@ -748,13 +750,20 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 
 // handleDiff returns the unified diff of a file against HEAD. available is false
 // (with an empty diff and 200) when git is off/absent or the file is unchanged.
+// ?full=1 requests the whole file (-U100000) for the POC full-file review;
+// the client parses it with the same parseDiff, as one giant hunk.
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	_, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
 	if !ok {
 		fail(w, 400, "bad path")
 		return
 	}
-	diff := gitDiffAgainst(s.ix.Root(), rel, s.diffBase)
+	var diff string
+	if r.URL.Query().Get("full") == "1" {
+		diff = gitDiffAgainstContext(s.ix.Root(), rel, s.diffBase, 100000)
+	} else {
+		diff = gitDiffAgainst(s.ix.Root(), rel, s.diffBase)
+	}
 	if uiVerbose {
 		status := "clean"
 		if diff != "" {

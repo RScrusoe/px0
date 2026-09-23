@@ -89,6 +89,15 @@
         <button id="pr-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
         <button id="pr-submit-approve" class="footer-btn" hidden title="Approve this PR">Approve</button>
       </div>
+      <div class="pr-bar-row pr-files-row">
+        <button id="pr-files-toggle" class="footer-btn" title="Show changed files checklist">Files <span id="pr-files-progress">0/0</span> &#9662;</button>
+        <span class="grow"></span>
+        <span id="pr-files-hint" class="pr-files-hint"></span>
+        <button id="pr-files-prev" class="footer-btn" title="Open previous unchecked file">Prev</button>
+        <button id="pr-files-next" class="footer-btn" title="Open next unchecked file">Next</button>
+        <button id="pr-diff-full" class="footer-btn" title="Toggle full-file diff vs hunks only">Full</button>
+      </div>
+      <div id="pr-files-list" class="pr-files-list" hidden></div>
     </div>
     <!-- Draft review comment composers, one .agent-box per open composer -->
     <div id="pr-comment-list" class="agentbox-list" hidden></div>

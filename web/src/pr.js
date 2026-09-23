@@ -9,7 +9,7 @@
 import { $, S, doc_, esc, api, apiPostJson, keyLabel, withKeys } from './state.js';
 import { showToast } from './ui.js';
 import { setReviewHandler, SEL_MENU_ITEMS } from './selbar.js';
-import { diffview, setPRSyncHandler } from './diff.js';
+import { diffview, setPRSyncHandler, syncDiffView, isFullDiff, setFullDiff, scrollToFirstChange, setDiffMode, layoutPref } from './diff.js';
 import { reloadWorkspace } from './agent.js';
 import { openFile } from './tabs.js';
 import { layout, render } from './renderer.js';
@@ -36,6 +36,7 @@ export function initPR() {
   renderBar();
   refreshComments();
   refreshExistingComments();
+  initChecklist();
 }
 
 // Re-fetches PR metadata and comments after an external change to the
@@ -227,6 +228,14 @@ async function submitReview(event) {
   if (event === 'REQUEST_CHANGES' && !body && !comments.length) {
     showToast('!', 'Add a comment or review body before requesting changes');
     return;
+  }
+  if (event === 'APPROVE') {
+    const left = prFiles.filter(f => !viewed[f.path]).length;
+    if (left > 0 && Date.now() - approveArmedAt > 8000) {
+      approveArmedAt = Date.now();
+      showToast('!', left + ' file' + (left === 1 ? '' : 's') + ' unchecked — click Approve again to approve anyway');
+      return;
+    }
   }
   try {
     await apiPostJson('/api/pr/submit', { event, body });
@@ -633,6 +642,119 @@ export async function launchPR(target) {
     showToast('✓', 'Opening PR in a new tab…');
   } catch (e) {
     showToast('!', e.message || 'Could not launch PR review');
+  }
+}
+
+let approveArmedAt = 0;
+let prFiles = [];   // [{path,status,additions,deletions}]
+let viewed = {};    // {path: true}
+
+/* ---------- file-by-file checklist (POC) ---------- */
+
+function initChecklist() {
+  renderFullToggle();
+  $('#pr-files-toggle')?.addEventListener('click', () => {
+    const el = $('#pr-files-list');
+    if (el) el.hidden = !el.hidden;
+  });
+  $('#pr-files-prev')?.addEventListener('click', () => stepFile(-1));
+  $('#pr-files-next')?.addEventListener('click', () => stepFile(1));
+  $('#pr-diff-full')?.addEventListener('click', () => {
+    setFullDiff(!isFullDiff());
+    renderFullToggle();
+    syncDiffView(true);
+  });
+  $('#pr-files-list')?.addEventListener('click', e => {
+    const cb = e.target.closest('input[data-pr-file]');
+    if (cb) {
+      setViewed(cb.dataset.prFile, cb.checked);
+      return;
+    }
+    const row = e.target.closest('[data-pr-open]');
+    if (row) openChecklistFile(row.dataset.prOpen);
+  });
+  refreshChecklist();
+}
+
+function renderFullToggle() {
+  const b = $('#pr-diff-full');
+  if (b) b.textContent = isFullDiff() ? 'Full' : 'Hunks';
+}
+
+async function refreshChecklist() {
+  try {
+    const [fj, vj] = await Promise.all([api('/api/pr/files'), api('/api/pr/viewed')]);
+    prFiles = fj.files || [];
+    viewed = vj.viewed || {};
+  } catch {
+    prFiles = [];
+  }
+  renderChecklist();
+}
+
+function renderChecklist() {
+  const listEl = $('#pr-files-list');
+  const progEl = $('#pr-files-progress');
+  const hintEl = $('#pr-files-hint');
+  const done = prFiles.filter(f => viewed[f.path]).length;
+  if (progEl) progEl.textContent = done + '/' + prFiles.length;
+  if (hintEl) hintEl.textContent = prFiles.length ? (done === prFiles.length ? 'all reviewed' : (prFiles.length - done) + ' left') : '';
+  if (!listEl) return;
+  if (!prFiles.length) {
+    listEl.innerHTML = '<div class="pr-comments-empty">No changed files.</div>';
+    return;
+  }
+  listEl.innerHTML = prFiles.map(f => {
+    const v = !!viewed[f.path];
+    const counts = (f.additions || f.deletions) ? ' <span class="pr-file-counts">+' + f.additions + '/-' + f.deletions + '</span>' : '';
+    return '<div class="pr-file-row' + (v ? ' done' : '') + '" data-pr-open="' + esc(f.path) + '">' +
+      '<input type="checkbox" data-pr-file="' + esc(f.path) + '"' + (v ? ' checked' : '') + '>' +
+      '<span class="pr-file-status pr-st-' + esc(f.status || 'M') + '">' + esc(f.status || 'M') + '</span>' +
+      '<span class="pr-file-name" title="Open diff">' + esc(f.path) + '</span>' +
+      counts + '</div>';
+  }).join('');
+}
+
+async function setViewed(path, on) {
+  viewed[path] = on;
+  if (!on) delete viewed[path];
+  renderChecklist();
+  try {
+    await apiPostJson('/api/pr/viewed', { path, viewed: on });
+  } catch (e) {
+    showToast('!', e.message || 'Could not save viewed state');
+  }
+}
+
+function stepFile(dir) {
+  if (!prFiles.length) return;
+  const cur = prFiles.findIndex(f => f.path === doc_()?.path);
+  for (let i = 1; i <= prFiles.length; i++) {
+    const idx = (((cur < 0 ? (dir > 0 ? -1 : 0) : cur) + dir * i) % prFiles.length + prFiles.length) % prFiles.length;
+    if (!viewed[prFiles[idx].path]) {
+      openChecklistFile(prFiles[idx].path);
+      return;
+    }
+  }
+  openChecklistFile(prFiles[(cur + dir + prFiles.length) % prFiles.length].path);
+}
+
+async function openChecklistFile(path) {
+  const listEl = $('#pr-files-list');
+  if (listEl) listEl.hidden = false;
+  await openFile(path);
+  const d = doc_();
+  if (d && d.diffAvailable && !d.diffMode) setDiffMode(layoutPref() || 'split');
+  if (d) {
+    d.scrollFirstChange = true;
+    if (!scrollToFirstChange()) {
+      const t0 = Date.now();
+      const poll = () => {
+        if (scrollToFirstChange() || Date.now() - t0 > 3000) return;
+        setTimeout(poll, 150);
+      };
+      setTimeout(poll, 150);
+    }
   }
 }
 

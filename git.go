@@ -366,10 +366,23 @@ func gitDiff(root, relpath string) string {
 // review session (pr.go) can diff a file against the merge-base with the
 // PR's target branch instead of the working tree's HEAD.
 func gitDiffAgainst(root, relpath, base string) string {
+	return gitDiffAgainstContext(root, relpath, base, 0)
+}
+
+// gitDiffAgainstContext is gitDiffAgainst with explicit context lines.
+// context <= 0 means git's default (-U3, hunks only). A large context
+// (e.g. 100000 for the POC full-file review) renders the whole file as one
+// giant hunk so the existing client-side parseDiff needs no changes.
+func gitDiffAgainstContext(root, relpath, base string, context int) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--no-color", base, "--", relpath).Output()
+	args := []string{"-C", root, "diff", "--no-color"}
+	if context > 0 {
+		args = append(args, "-U"+strconv.Itoa(context))
+	}
+	args = append(args, base, "--", relpath)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
 		return ""
 	}

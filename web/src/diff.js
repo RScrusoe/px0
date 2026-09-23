@@ -24,6 +24,33 @@ export function layoutPref() {
   try { return localStorage.getItem('px0.diffLayout') || 'split'; } catch { return 'split'; }
 }
 
+// POC full-file review: 'Full' renders the whole file (-U100000) as one giant
+// hunk through the same parseDiff/renderer; 'Hunks' is the classic -U3 view.
+// Default Full in PR mode, Hunks elsewhere; toggled from pr.js #pr-diff-full.
+export function isFullDiff() {
+  try {
+    const v = localStorage.getItem('px0.diffFull');
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return !!(S.meta && S.meta.pr);
+}
+
+export function setFullDiff(full) {
+  try { localStorage.setItem('px0.diffFull', full ? '1' : '0'); } catch {}
+}
+
+// After a full-file diff renders, jump to the first changed row so clicking a
+// file lands on its first hunk while the whole file stays readable above/below.
+export function scrollToFirstChange() {
+  if (!diffview || diffview.hidden) return false;
+  const el = diffContent.querySelector('.diff-add, .diff-del');
+  if (!el) return false;
+  const top = el.getBoundingClientRect().top - diffview.getBoundingClientRect().top;
+  diffview.scrollTop += top - diffview.clientHeight * 0.25;
+  return true;
+}
+
 function diffMode(d = doc_()) {
   return (d && d.diffMode) || null;
 }
@@ -81,15 +108,18 @@ export async function setDiffMode(mode) {
 }
 
 async function drawDiff(d, force = false) {
-  if (force || d.diffText === undefined) {
+  const wantFull = isFullDiff();
+  if (force || d.diffText === undefined || d.diffWasFull !== wantFull) {
     diffContent.replaceChildren();
     try {
-      d.diffReq = api('/api/diff', { path: d.path });
+      d.diffReq = api('/api/diff', { path: d.path, ...(wantFull ? { full: '1' } : {}) });
       const j = await d.diffReq;
       d.diffText = j.diff || '';
+      d.diffWasFull = wantFull;
       d.diffHunks = parseDiff(d.diffText);
     } catch (e) {
       d.diffText = '';
+      d.diffWasFull = wantFull;
       d.diffHunks = [];
       setStatusNote('No diff: ' + e.message, 4000);
     } finally {
@@ -101,6 +131,9 @@ async function drawDiff(d, force = false) {
   if (d.diffScroll) {
     diffview.scrollTop = d.diffScroll;
     d.diffScroll = 0;
+  } else if (d.scrollFirstChange) {
+    d.scrollFirstChange = false;
+    scrollToFirstChange();
   }
 }
 

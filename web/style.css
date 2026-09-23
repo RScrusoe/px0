@@ -1909,6 +1909,21 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
   border: 1px solid var(--line); border-radius: 4px; outline: none;
 }
 .pr-review-body:focus { border-color: var(--accent); }
+.pr-files-row { gap: 6px; }
+.pr-files-hint { font: 11px var(--ui); color: var(--faint); }
+.pr-files-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 30vh; overflow-y: auto; padding: 2px 0;
+}
+.pr-files-list[hidden] { display: none; }
+.pr-file-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.pr-file-row:hover { background: var(--bg3); }
+.pr-file-row.done .pr-file-name { color: var(--faint); text-decoration: line-through; }
+.pr-file-row input { accent-color: var(--accent); }
+.pr-file-status { font: 600 10px var(--mono); width: 14px; text-align: center; flex: none; }
+.pr-st-M { color: var(--accent-fg); } .pr-st-A { color: var(--s); } .pr-st-D { color: var(--err); } .pr-st-R { color: var(--m); }
+.pr-file-name { font: 12px var(--mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-file-counts { font: 11px var(--mono); color: var(--faint); flex: none; }
 #pr-comment-list[hidden] { display: none; }
 
 #pr-comment-list {
