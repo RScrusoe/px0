@@ -976,15 +976,12 @@ function renderPRList() {
 
 async function openListedPR(number) {
   if (meta?.number === number) return;
-  if (meta?.mode === 'checkout') {
-    showToast('!', 'Return to your branch before opening another PR');
-    return;
-  }
   const row = document.querySelector('[data-pr-number="' + number + '"]');
   row?.classList.add('loading');
   try {
     const m = await apiPostJson('/api/prs/open', { number });
     enterPR(m);
+    if (m.mode === 'checkout') await refreshTree();
     await reloadOpenTabs();
     await refreshChecklist();
     if (prFiles.length) openFile(prFiles[0].path);

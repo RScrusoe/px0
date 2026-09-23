@@ -358,8 +358,12 @@ func (s *Server) handlePROpen(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "number is required")
 		return
 	}
-	if cur := s.curPR(); cur != nil && cur.mode == prModeCheckout {
-		fail(w, http.StatusConflict, "return from the checked-out PR before opening another")
+	// Opening a PR while another is checked out hops the checkout to it, but
+	// Return must still land on the branch the user was on before any PR.
+	cur := s.curPR()
+	hop := cur != nil && cur.mode == prModeCheckout
+	if hop && gitHasUncommittedChanges(s.ix.Root()) {
+		fail(w, http.StatusConflict, errDirtyTree.Error())
 		return
 	}
 	owner, repo, ok := repoGitHubTarget(s.ix.Root())
@@ -374,7 +378,24 @@ func (s *Server) handlePROpen(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if hop {
+		cur.mu.Lock()
+		origin := cur.prevBranch
+		cur.mu.Unlock()
+		if err := p.checkout(); err != nil {
+			p.Close()
+			fail(w, http.StatusConflict, err.Error())
+			return
+		}
+		p.mu.Lock()
+		p.prevBranch = origin
+		p.mu.Unlock()
+	}
 	s.setActivePR(p)
+	if hop {
+		EvictAll()
+		go s.ix.Build()
+	}
 	writeJSON(w, p.metaJSON())
 }
 
