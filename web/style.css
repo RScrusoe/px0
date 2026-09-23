@@ -338,7 +338,7 @@ body.right-hidden #right-side, body.right-hidden #right-resizer { display: none;
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 /* View-mode switches (Markdown Preview/Source, git Diff), pinned to the right
    of the tab bar. The bar pads its end so the last tab can scroll clear of them. */
-#view-switches { position: absolute; top: calc(var(--pr-bar-h, 0px) + 3px); right: 8px; z-index: 7; display: flex; gap: 6px; }
+#view-switches { position: absolute; top: 3px; right: 8px; z-index: 7; display: flex; gap: 6px; }
 .view-switch {
   height: 22px; display: flex; gap: 1px;
   padding: 1px; background: var(--bg3); border: 1px solid var(--line); border-radius: 5px;
@@ -1871,8 +1871,30 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 /* ---------- PR review (web/src/pr.js) ---------- */
 .pr-bar {
   display: flex; flex-direction: column; gap: 6px;
-  padding: 6px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+  padding: 6px 4px 4px 8px; margin-top: 4px; border-top: 1px solid var(--line);
+  cursor: default;
 }
+.pr-bar-row:empty, .pr-bar-row:has(> [hidden]:only-child) { display: none; }
+.pr-bar .footer-btn { padding: 2px 8px; }
+.pr-bar > .pr-bar-row { flex-wrap: wrap; row-gap: 4px; }
+.pr-overview-btn { text-decoration: none; }
+.pr-files-progress { font: 11px var(--mono); color: var(--fg); flex: none; }
+.pr-bar .pr-files-bar { flex: 1 1 auto; }
+.pr-refs { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.prs-row-head { cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.prs-row { cursor: default; }
+.prs-row.active.folded .prs-detail { display: none; }
+.pr-chev { width: 10px; flex: none; color: var(--faint); font-size: 11px; text-align: center; }
+.pr-files-tree { display: flex; flex-direction: column; margin: 2px -4px 0 -8px; }
+.pr-dir-row, .pr-files-tree .pr-file-row {
+  display: flex; align-items: center; gap: 6px; height: 22px; padding-right: 8px;
+  border-radius: 0; cursor: pointer; font: 12px var(--ui);
+}
+.pr-dir-row:hover, .pr-files-tree .pr-file-row:hover { background: var(--bg3); }
+.pr-dir-row input, .pr-files-tree input { margin: 0; accent-color: var(--accent); flex: none; }
+.pr-dir-name { color: var(--dim, var(--fg)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pr-files-tree .pr-file-name { font: 12px var(--ui); }
+.pr-files-tree .pr-file-status { margin-left: auto; }
 .pr-bar[hidden] { display: none; }
 .pr-bar-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pr-link {

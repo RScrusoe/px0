@@ -77,35 +77,41 @@
 
   <!-- SECTION: Main Editor Area -->
   <main id="main">
-    <!-- PR review bar: shown only when this session is `px0 pr ...` (web/src/pr.js) -->
+    <!-- Active PR details. Lives in its row of the sidebar's Pull Requests view
+         (web/src/pr.js moves it there); parked here, hidden, when no PR is open. -->
+    <div id="pr-bar-home" hidden>
     <div id="pr-bar" class="pr-bar" hidden>
       <div class="pr-bar-row">
-        <a id="pr-link" class="pr-link" title="Open PR overview (description, commits, review)">
-          <span id="pr-badge" class="pr-badge"></span>
-          <span id="pr-title" class="pr-title"></span>
-        </a>
         <span id="pr-mode" class="pr-mode-pill"></span>
         <span id="pr-merged-badge" class="pr-merged-badge" hidden>Merged</span>
-        <span id="pr-refs" class="pr-refs"></span>
-        <span class="grow"></span>
-        <span id="pr-diff-warning" class="pr-diff-warning" hidden>&#9888; diff base unresolved</span>
+        <span id="pr-diff-warning" class="pr-diff-warning" hidden title="diff base unresolved">&#9888;</span>
         <span id="pr-readonly-note" class="pr-readonly-note" hidden>Read-only</span>
-        <span id="pr-draft-count" class="pr-draft-count"></span>
-        <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">&#9889; Batch Apply</button>
+        <span class="grow"></span>
         <button id="pr-checkout" class="footer-btn pr-btn-primary" hidden title="Switch this repo onto the PR head to edit, run, and use go-to-definition">Checkout</button>
         <button id="pr-return" class="footer-btn" hidden title="Switch back to the branch you were on"></button>
         <button id="pr-exit" class="pr-exit" hidden title="Close review" aria-label="Close review">&#10005;</button>
       </div>
-      <div class="pr-bar-row pr-files-row">
-        <button id="pr-files-toggle" class="footer-btn" title="Show changed files checklist">Files <span id="pr-files-progress">0/0</span> &#9662;</button>
+      <div class="pr-bar-row">
+        <span id="pr-refs" class="pr-refs"></span>
+      </div>
+      <div class="pr-bar-row">
+        <span id="pr-files-progress" class="pr-files-progress">0/0</span>
         <span id="pr-files-bar" class="pr-files-bar"><span id="pr-files-bar-fill"></span></span>
         <span id="pr-files-hint" class="pr-files-hint"></span>
+      </div>
+      <div class="pr-bar-row">
+        <a id="pr-link" class="footer-btn pr-btn-primary pr-overview-btn" title="Description, commits, comment / approve / request changes">Description &amp; Review</a>
+        <span id="pr-draft-count" class="pr-draft-count"></span>
         <span class="grow"></span>
-        <button id="pr-files-prev" class="footer-btn" title="Open previous unchecked file">&#8592; Prev</button>
-        <button id="pr-files-next" class="footer-btn" title="Open next unchecked file">Next &#8594;</button>
+        <button id="pr-files-prev" class="footer-btn" title="Open previous unchecked file">&#8592;</button>
+        <button id="pr-files-next" class="footer-btn" title="Open next unchecked file">&#8594;</button>
         <button id="pr-diff-full" class="footer-btn" title="Toggle full-file diff vs hunks only">Full</button>
       </div>
-      <div id="pr-files-list" class="pr-files-list" hidden></div>
+      <div class="pr-bar-row">
+        <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">&#9889; Batch Apply</button>
+      </div>
+      <div id="pr-files-list" class="pr-files-tree"></div>
+    </div>
     </div>
     <!-- Draft review comment composers, one .agent-box per open composer -->
     <div id="pr-comment-list" class="agentbox-list" hidden></div>

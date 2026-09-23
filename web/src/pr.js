@@ -38,18 +38,7 @@ export function initPR() {
   wireCommentsPanel();
   initChecklist();
   initPRList();
-  trackBarHeight();
   if (S.meta.pr) enterPR(S.meta.pr);
-}
-
-// #view-switches is absolutely positioned over the tab row, so it must drop
-// below the bar, whose height varies with the files checklist.
-function trackBarHeight() {
-  const b = prBar();
-  if (!b) return;
-  new ResizeObserver(() => {
-    document.documentElement.style.setProperty('--pr-bar-h', (b.hidden ? 0 : b.offsetHeight) + 'px');
-  }).observe(b);
 }
 
 // Starts (or switches to) reviewing a PR without a page reload.
@@ -72,6 +61,7 @@ function enterPR(m) {
   refreshExistingComments();
   refreshChecklist();
   renderPRList();
+  setSidebarMode('prs');
   layout(); render();
 }
 
@@ -87,6 +77,7 @@ function leavePR() {
     const el = $(id);
     if (el) el.hidden = true;
   }
+  parkBar();
   renderPRList();
   layout(); render();
 }
@@ -148,13 +139,8 @@ function renderBar() {
   const b = prBar();
   if (!b || !meta) return;
   b.hidden = false;
-  $('#pr-badge').textContent = '#' + meta.number;
-  const link = $('#pr-link');
-  if (link) link.href = meta.url || '#';
   const mb = $('#pr-merged-badge');
   if (mb) mb.hidden = !meta.merged;
-  $('#pr-title').textContent = meta.title;
-  $('#pr-title').title = meta.title;
   $('#pr-refs').textContent = meta.base + ' ← ' + meta.head;
   $('#pr-draft-count').textContent = comments.length
     ? (comments.length + (comments.length === 1 ? ' draft comment' : ' draft comments'))
@@ -732,10 +718,6 @@ let viewed = {};    // {path: true}
 
 function initChecklist() {
   renderFullToggle();
-  $('#pr-files-toggle')?.addEventListener('click', () => {
-    const el = $('#pr-files-list');
-    if (el) el.hidden = !el.hidden;
-  });
   $('#pr-files-prev')?.addEventListener('click', () => stepFile(-1));
   $('#pr-files-next')?.addEventListener('click', () => stepFile(1));
   $('#pr-diff-full')?.addEventListener('click', () => {
@@ -747,6 +729,18 @@ function initChecklist() {
     const cb = e.target.closest('input[data-pr-file]');
     if (cb) {
       setViewed(cb.dataset.prFile, cb.checked);
+      return;
+    }
+    const dirCb = e.target.closest('input[data-pr-dir]');
+    if (dirCb) {
+      setDirViewed(dirCb.dataset.prDir, dirCb.checked);
+      return;
+    }
+    const dir = e.target.closest('[data-pr-dir-toggle]');
+    if (dir) {
+      const key = dir.dataset.prDirToggle;
+      if (collapsedDirs.has(key)) collapsedDirs.delete(key); else collapsedDirs.add(key);
+      renderChecklist();
       return;
     }
     const row = e.target.closest('[data-pr-open]');
@@ -786,17 +780,71 @@ function renderChecklist() {
     listEl.innerHTML = '<div class="pr-comments-empty">No changed files.</div>';
     return;
   }
+  listEl.innerHTML = renderFileTree(buildFileTree(prFiles), 0);
+}
+
+const collapsedDirs = new Set();  // dir paths folded in the files tree
+
+// Nests changed files by directory and folds single-child directory chains
+// into one row ("main/java/com/..."), like Cursor's PR tree.
+function buildFileTree(files) {
+  const root = { dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), files: [] });
+      node = node.dirs.get(part);
+    }
+    node.files.push({ ...f, name: parts[parts.length - 1] });
+  }
+  const fold = (node, prefix) => [...node.dirs].map(([name, child]) => {
+    let label = name;
+    let path = prefix + name;
+    while (child.dirs.size === 1 && !child.files.length) {
+      const [n, c] = [...child.dirs][0];
+      label += '/' + n;
+      path += '/' + n;
+      child = c;
+    }
+    return { label, path, dirs: fold(child, path + '/'), files: child.files };
+  });
+  return { label: '', path: '', dirs: fold(root, ''), files: root.files };
+}
+
+function dirFiles(dir) {
+  return dir.files.concat(...dir.dirs.map(dirFiles));
+}
+
+function renderFileTree(dir, depth) {
   const active = doc_()?.path;
-  listEl.innerHTML = prFiles.map(f => {
+  const pad = d => ' style="padding-left:' + (4 + d * 12) + 'px"';
+  let html = '';
+  for (const sub of dir.dirs) {
+    const all = dirFiles(sub);
+    const done = all.filter(f => viewed[f.path]).length;
+    const folded = collapsedDirs.has(sub.path);
+    html += '<div class="pr-dir-row" data-pr-dir-toggle="' + esc(sub.path) + '"' + pad(depth) + '>' +
+      '<span class="pr-chev">' + (folded ? '\u203A' : '\u2304') + '</span>' +
+      '<input type="checkbox" data-pr-dir="' + esc(sub.path) + '"' + (done === all.length ? ' checked' : '') + '>' +
+      '<span class="pr-dir-name" title="' + esc(sub.path) + '">' + esc(sub.label) + '</span></div>';
+    if (!folded) html += renderFileTree(sub, depth + 1);
+  }
+  for (const f of dir.files) {
     const v = !!viewed[f.path];
-    const cur = f.path === active ? ' current' : '';
-    const counts = (f.additions || f.deletions) ? ' <span class="pr-file-counts">+' + f.additions + '/-' + f.deletions + '</span>' : '';
-    return '<div class="pr-file-row' + (v ? ' done' : '') + cur + '" data-pr-open="' + esc(f.path) + '">' +
+    const st = f.status || 'M';
+    html += '<div class="pr-file-row' + (v ? ' done' : '') + (f.path === active ? ' current' : '') + '" data-pr-open="' + esc(f.path) + '"' + pad(depth) + ' title="' + esc(f.path) + '">' +
+      '<span class="pr-chev"></span>' +
       '<input type="checkbox" data-pr-file="' + esc(f.path) + '"' + (v ? ' checked' : '') + '>' +
-      '<span class="pr-file-status pr-st-' + esc(f.status || 'M') + '">' + esc(f.status || 'M') + '</span>' +
-      '<span class="pr-file-name" title="Open diff">' + esc(f.path) + '</span>' +
-      counts + '</div>';
-  }).join('');
+      '<span class="pr-file-name">' + esc(f.name) + '</span>' +
+      '<span class="pr-file-status pr-st-' + esc(st) + '">' + esc(st) + '</span></div>';
+  }
+  return html;
+}
+
+async function setDirViewed(dirPath, on) {
+  const paths = prFiles.map(f => f.path).filter(p => p.startsWith(dirPath + '/') && !!viewed[p] !== on);
+  await Promise.all(paths.map(p => setViewed(p, on)));
 }
 
 function renderActiveFileHighlight() {
@@ -837,8 +885,7 @@ function stepFile(dir) {
 }
 
 async function openChecklistFile(path) {
-  const listEl = $('#pr-files-list');
-  if (listEl) listEl.hidden = false;
+  closePRPage();
   await openFile(path);
   const d = doc_();
   if (d && d.diffAvailable && !d.diffMode) setDiffMode(layoutPref() || 'split');
@@ -924,8 +971,15 @@ function initPRList() {
   $('#btn-prs')?.addEventListener('click', () => setSidebarMode('prs'));
   $('#prs-refresh')?.addEventListener('click', loadPRList);
   $('#prs-list')?.addEventListener('click', e => {
-    const row = e.target.closest('[data-pr-number]');
-    if (row) openListedPR(+row.dataset.prNumber);
+    const head = e.target.closest('.prs-row-head');
+    if (!head) return;
+    const number = +head.parentElement.dataset.prNumber;
+    if (meta?.number === number) {
+      detailFolded = !detailFolded;
+      renderPRList();
+      return;
+    }
+    openListedPR(number);
   });
   loadPRList();
 }
@@ -948,30 +1002,52 @@ function renderPRList() {
   const repoEl = $('#prs-repo');
   if (repoEl) repoEl.textContent = prList.repo || 'Pull Requests';
   const activeNum = meta?.number || 0;
-  if (!prList.repo) {
+  if (!prList.repo && !meta) {
     listEl.innerHTML = '<div class="prs-empty">No GitHub <code>origin</code> remote in this repo.</div>';
     return;
   }
-  if (!prList.token) {
+  if (!prList.token && !meta) {
     listEl.innerHTML = '<div class="prs-empty">Sign in to GitHub to see open pull requests.<pre>gh auth login</pre></div>';
     return;
   }
-  if (prList.error) {
+  if (prList.error && !meta) {
     listEl.innerHTML = '<div class="prs-empty">' + esc(prList.error) + '</div>';
     return;
   }
-  const prs = prList.prs || [];
+  const prs = (prList.prs || []).slice();
+  if (meta && !prs.some(p => p.number === meta.number)) {
+    prs.unshift({ number: meta.number, title: meta.title, author: meta.author, head: meta.head });
+  }
   if (!prs.length) {
     listEl.innerHTML = '<div class="prs-empty">No open pull requests.</div>';
     return;
   }
-  listEl.innerHTML = prs.map(pr =>
-    '<div class="prs-row' + (pr.number === activeNum ? ' active' : '') + '" data-pr-number="' + pr.number + '" title="' + esc(pr.title) + '">' +
-      '<div class="prs-row-title"><span class="prs-num">#' + pr.number + '</span>' +
-        '<span class="prs-title">' + esc(pr.title) + '</span>' +
-        (pr.draft ? '<span class="prs-draft">Draft</span>' : '') + '</div>' +
-      '<div class="prs-row-meta"><span>' + esc(pr.author || '') + '</span><span class="prs-branch">' + esc(pr.head || '') + '</span></div>' +
-    '</div>').join('');
+  parkBar();
+  listEl.innerHTML = prs.map(pr => {
+    const isActive = pr.number === activeNum;
+    return '<div class="prs-row' + (isActive ? ' active' : '') + (isActive && detailFolded ? ' folded' : '') + '" data-pr-number="' + pr.number + '">' +
+      '<div class="prs-row-head" title="' + esc(pr.title) + '">' +
+        '<div class="prs-row-title"><span class="pr-chev">' + (isActive && !detailFolded ? '\u2304' : '\u203A') + '</span>' +
+          '<span class="prs-num">#' + pr.number + '</span>' +
+          '<span class="prs-title">' + esc(pr.title) + '</span>' +
+          (pr.draft ? '<span class="prs-draft">Draft</span>' : '') + '</div>' +
+        '<div class="prs-row-meta"><span>' + esc(pr.author || '') + '</span><span class="prs-branch">' + esc(pr.head || '') + '</span></div>' +
+      '</div>' +
+      (isActive ? '<div class="prs-detail"></div>' : '') +
+    '</div>';
+  }).join('');
+  const detail = listEl.querySelector('.prs-detail');
+  if (detail && meta) detail.appendChild(prBar());
+}
+
+let detailFolded = false;
+
+// The PR details node is moved into the active list row; before the list is
+// re-rendered it goes back to its parking spot so innerHTML can't destroy it.
+function parkBar() {
+  const b = prBar();
+  const home = $('#pr-bar-home');
+  if (b && home && b.parentElement !== home) home.appendChild(b);
 }
 
 async function openListedPR(number) {
@@ -980,11 +1056,11 @@ async function openListedPR(number) {
   row?.classList.add('loading');
   try {
     const m = await apiPostJson('/api/prs/open', { number });
+    detailFolded = false;
     enterPR(m);
     if (m.mode === 'checkout') await refreshTree();
     await reloadOpenTabs();
-    await refreshChecklist();
-    if (prFiles.length) openFile(prFiles[0].path);
+    openPRPage();
   } catch (e) {
     showToast('!', e.message || 'Could not open PR');
   } finally {
